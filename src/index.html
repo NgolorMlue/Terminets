@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NODE/GRID — VPS Control</title>
+  <link rel="stylesheet" href="assets/leaflet/leaflet.min.css">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- ═══ HEADER ═══ -->
+  <div id="header">
+    <button class="menu-btn" id="menu-btn">&#9776;</button>
+    <div class="logo">NODE<em>/</em>GRID</div>
+    <div class="header-stats">
+      <div class="hs"><span class="hs-val" id="h-online">0</span><span class="hs-label">Online</span></div>
+      <div class="hs"><span class="hs-val" id="h-total">0</span><span class="hs-label">Total</span></div>
+      <div class="hs hs-ping">
+        <span class="hs-val-row">
+          <span class="hs-val" id="h-avgping">—</span>
+          <button class="hs-refresh-btn" id="h-avgping-refresh-btn" type="button" title="Refresh server ping" aria-label="Refresh server ping">
+            <span class="hs-refresh-icon">&#x21bb;</span>
+          </button>
+        </span>
+        <span class="hs-label">Avg Ping</span>
+      </div>
+    </div>
+    <div class="live-badge"><div class="live-dot"></div><span>LIVE</span></div>
+  </div>
+
+  <div id="body-row">
+
+    <!-- ═══ SIDEBAR ═══ -->
+    <div id="sidebar">
+      <div class="sb-full">
+        <button class="sb-main-tab" id="sb-main-tab">
+          <span class="sb-main-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+              <path d="M3 11.5 12 4l9 7.5"></path>
+              <path d="M6.5 10.8V20h11V10.8"></path>
+              <path d="M10 20v-5h4v5"></path>
+            </svg>
+          </span>
+          <span class="sb-main-text">
+            <span class="sb-main-title">Main</span>
+            <span class="sb-main-subtitle">Dashboard</span>
+          </span>
+          <span class="sb-main-spacer" aria-hidden="true"></span>
+        </button>
+        <div class="sb-node-info">
+          <div class="sb-node-line">
+            <span class="sb-node-caption">Number of Nodes:</span>
+            <span class="sb-node-total" id="sb-node-summary">0</span>
+          </div>
+          <div class="sb-node-actions">
+            <button class="sb-folder-btn" id="sb-add-folder-btn" title="Add Folder">Add Folder</button>
+            <span class="sb-node-sep">|</span>
+            <button class="sb-add-btn" id="sb-add-btn" title="Add Server">Add Server</button>
+          </div>
+        </div>
+        <div class="sb-list" id="sb-list"></div>
+        <button class="sb-settings-tab" id="sb-gear-btn" title="Server Settings">
+          <span class="sb-settings-icon">&#x2699;</span>
+          <span class="sb-settings-label">Settings</span>
+        </button>
+      </div>
+      <div class="sb-rail" id="sb-rail"></div>
+      <button class="sb-toggle" id="sb-toggle-btn">
+        <span id="sb-toggle-arrow">&#8249;</span>
+        <span class="sb-toggle-label">COLLAPSE</span>
+      </button>
+      <div id="sb-resize"></div>
+    </div>
+
+    <div id="sidebar-overlay"></div>
+
+    <!-- ═══ MAIN ═══ -->
+    <div id="main">
+
+      <!-- ── MAP ── -->
+      <div id="map-section">
+        <div id="map-collapse-bar">
+          <div class="mcb-title"><div class="live-dot"></div> GLOBAL MESH</div>
+          <button class="map-toggle-btn" id="map-toggle-btn">&#9662; Collapse</button>
+        </div>
+        <div id="leaflet-map"></div>
+        <svg id="conn-svg"></svg>
+        <div class="map-legend">
+          <div class="ml-title">Latency</div>
+          <div class="ml-row"><div class="ml-line" style="background:#00bfff"></div> &lt;50 ms</div>
+          <div class="ml-row"><div class="ml-line" style="background:#f5a623"></div> 50-150 ms</div>
+          <div class="ml-row"><div class="ml-line" style="background:#ff3b5c"></div> &gt;150 ms / down</div>
+        </div>
+        <div class="map-hint">click a node to inspect</div>
+        <div id="map-resize"></div>
+      </div>
+      <div id="dashboard-section" style="display:none">
+        <div class="dash-layout">
+          <div class="dash-hero-card">
+            <div class="dash-title-wrap">
+              <div class="dash-app-title">NODE/GRID</div>
+              <div class="dash-subtitle">Main Dashboard</div>
+            </div>
+            <div class="dash-actions">
+              <button class="dash-btn" id="dash-start-local-terminal-btn">Start Local Terminal</button>
+              <button class="dash-btn ghost" id="dash-remove-previous-session-btn">Remove Previous Session</button>
+            </div>
+            <div class="dash-terminal-picker" id="dash-terminal-picker" style="display:none">
+              <span class="dash-picker-label">Choose terminal:</span>
+              <button class="dash-btn" id="dash-launch-powershell-btn">PowerShell</button>
+              <button class="dash-btn" id="dash-launch-cmd-btn">CMD</button>
+              <button class="dash-btn" id="dash-launch-bash-btn">Bash</button>
+              <button class="dash-btn" id="dash-launch-zsh-btn">Zsh</button>
+              <button class="dash-btn ghost" id="dash-cancel-terminal-picker-btn">Cancel</button>
+            </div>
+            <div class="dash-status" id="dash-status"></div>
+          </div>
+
+          <div class="dash-map-card">
+            <div class="dash-panel-title">Server Map</div>
+            <div class="dash-panel-subtitle">All nodes in your fleet</div>
+            <div class="dash-map" id="dash-map"></div>
+          </div>
+
+          <div class="dash-server-card">
+            <div class="dash-panel-title">Server Latency</div>
+            <div class="dash-panel-subtitle">Click a server to select it</div>
+            <div class="dash-server-list" id="dash-server-list"></div>
+          </div>
+
+          <div class="dash-host-card">
+            <div class="dash-panel-title">Host Information</div>
+            <div class="dash-grid">
+              <div class="dash-card">
+                <div class="dash-card-label">Host Name</div>
+                <div class="dash-card-value" id="dash-hostname">—</div>
+              </div>
+              <div class="dash-card">
+                <div class="dash-card-label">OS</div>
+                <div class="dash-card-value" id="dash-os">—</div>
+              </div>
+              <div class="dash-card">
+                <div class="dash-card-label">CPU Cores</div>
+                <div class="dash-card-value" id="dash-cpu-cores">—</div>
+              </div>
+              <div class="dash-card">
+                <div class="dash-card-label">Memory</div>
+                <div class="dash-card-value" id="dash-memory">—</div>
+              </div>
+            </div>
+            <div class="dash-terminal-path" id="dash-terminal-path">Terminal workspace: —</div>
+          </div>
+
+          <div class="dash-recent-card">
+            <div class="dash-recent-title">Recent Session History</div>
+            <div class="dash-recent-list" id="dash-recent-session-list"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── BOTTOM: TABS + PANELS ── -->
+      <div id="bottom-section">
+        <div class="tab-bar">
+          <button class="tab-metrics active" id="tab-metrics-btn">&#9632; Metrics</button>
+          <button class="tab-sftp" id="tab-sftp-btn" style="display:none">&#9632; SFTP</button>
+          <div class="term-tab-area" id="term-tab-area">
+            <button class="tab-add" id="tab-add-btn" data-tip="Open local terminal">+</button>
+          </div>
+          <div class="tab-add-menu" id="tab-add-menu" style="display:none">
+            <button class="tab-add-menu-item" id="tab-add-new-ssh" data-action="ssh">New SSH Connection</button>
+            <div class="tab-add-menu-sep"></div>
+            <button class="tab-add-menu-item" data-action="powershell">PowerShell</button>
+            <button class="tab-add-menu-item" data-action="cmd">CMD</button>
+            <button class="tab-add-menu-item" data-action="bash">Bash</button>
+            <button class="tab-add-menu-item" data-action="zsh">Zsh</button>
+          </div>
+          <button class="tab-maximize" id="tab-maximize-btn" title="Maximize terminal area">
+            <span id="maximize-icon">&#10530;</span>
+            <span id="maximize-label">MAX</span>
+          </button>
+        </div>
+
+        <div id="term-panels-host" style="display:contents">
+          <!-- metrics panel -->
+          <div class="tab-panel active" id="metrics-panel">
+            <div class="metrics-empty" id="m-empty">
+              <div class="empty-icon">&#9671;</div>
+              Select a node to view metrics
+            </div>
+            <div id="m-content" style="display:none"></div>
+          </div>
+
+          <div class="tab-panel" id="sftp-panel">
+            <div class="sftp-empty" id="sftp-empty">Select a node to browse files</div>
+            <div class="sftp-shell" id="sftp-shell" style="display:none">
+              <div class="sftp-head">
+                <div class="sftp-title">SFTP Browser</div>
+                <div class="sftp-head-actions">
+                  <div class="sftp-pane-toggle">
+                    <button class="sftp-pane-btn active" id="sftp-pane-files-btn">Files</button>
+                    <button class="sftp-pane-btn" id="sftp-pane-editor-btn" disabled>Editor</button>
+                  </div>
+                  <div class="sftp-view-toggle">
+                    <button class="sftp-view-btn active" id="sftp-view-list-btn">List</button>
+                    <button class="sftp-view-btn" id="sftp-view-grid-btn">Grid</button>
+                  </div>
+                  <button class="sftp-btn" id="sftp-upload-btn">Upload</button>
+                  <button class="sftp-btn" id="sftp-new-file-btn">New File</button>
+                  <button class="sftp-btn" id="sftp-refresh-btn">Refresh</button>
+                </div>
+              </div>
+              <div class="sftp-nav" id="sftp-nav">
+                <button class="sftp-btn" id="sftp-up-btn" title="Parent">Up</button>
+                <input class="sftp-path" id="sftp-path-input" value="." spellcheck="false">
+                <button class="sftp-btn" id="sftp-go-btn">Go</button>
+              </div>
+              <div class="sftp-status" id="sftp-status-static">Select a node to start</div>
+              <div class="sftp-table-wrap" id="sftp-table-wrap-static">
+                <div class="sftp-header-row sftp-grid-row" id="sftp-header-static">
+                  <div class="sftp-cell sftp-name">Name<div class="sftp-col-resizer" data-col="0"></div></div>
+                  <div class="sftp-cell sftp-type">Type<div class="sftp-col-resizer" data-col="1"></div></div>
+                  <div class="sftp-cell sftp-size">Size<div class="sftp-col-resizer" data-col="2"></div></div>
+                  <div class="sftp-cell sftp-created">Created<div class="sftp-col-resizer" data-col="3"></div></div>
+                  <div class="sftp-cell sftp-chmod">Chmod</div>
+                </div>
+                <div class="sftp-list" id="sftp-list-static"></div>
+              </div>
+              <div class="sftp-editor-wrap" id="sftp-editor-wrap" style="display:none">
+                <div class="sftp-editor-head">
+                  <div class="sftp-editor-file" id="sftp-editor-file">No file selected</div>
+                  <div class="sftp-editor-meta" id="sftp-editor-meta"></div>
+                  <div class="sftp-editor-actions">
+                    <span class="sftp-editor-dirty" id="sftp-editor-dirty" style="display:none">Unsaved changes</span>
+                    <button class="sftp-btn" id="sftp-editor-save-btn" disabled>Save</button>
+                    <button class="sftp-btn" id="sftp-editor-close-btn">Close</button>
+                  </div>
+                </div>
+                <textarea class="sftp-editor-text" id="sftp-editor-text" spellcheck="false"></textarea>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+<div class="sftp-context-menu" id="sftp-context-menu" style="display:none"></div>
+<div class="sftp-context-menu" id="server-context-menu" style="display:none"></div>
+<div class="sftp-context-menu" id="folder-context-menu" style="display:none"></div>
+
+<script src="assets/leaflet/leaflet.min.js"></script>
+<script type="module" src="app.js"></script>
+</body>
+</html>
