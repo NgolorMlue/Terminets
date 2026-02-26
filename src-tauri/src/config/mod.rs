@@ -11,6 +11,8 @@ pub struct ServerConfig {
     pub host: String,
     pub port: u16,
     pub username: String,
+    #[serde(default = "default_connection_protocol")]
+    pub protocol: ConnectionProtocol,
     pub auth_method: AuthMethod,
     pub location: String,
     pub lat: f64,
@@ -21,6 +23,17 @@ pub struct ServerConfig {
 
 fn default_server_icon() -> String {
     "server".to_string()
+}
+
+fn default_connection_protocol() -> ConnectionProtocol {
+    ConnectionProtocol::Ssh
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ConnectionProtocol {
+    Ssh,
+    Telnet,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

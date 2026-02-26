@@ -3,9 +3,10 @@
 
 mod config;
 mod ssh;
+mod telnet;
 
 use config::store::ConfigStore;
-use config::{AuthMethod, FolderConfig, ServerConfig};
+use config::{AuthMethod, ConnectionProtocol, FolderConfig, ServerConfig};
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
 use ssh::host_key::clear_known_host as clear_known_host_impl;
@@ -18,6 +19,7 @@ use ssh::sftp::{
     upload_file as sftp_upload_file_impl, write_file as sftp_write_file_impl, SftpListResponse,
     SftpReadFileResponse, SftpWriteFileResponse,
 };
+use telnet::manager::TelnetSessionManager;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::io::{Read, Write};
@@ -104,6 +106,13 @@ fn apply_auth_overrides(
             *configured = password;
         }
     }
+}
+
+fn ensure_ssh_protocol(server: &ServerConfig) -> Result<(), String> {
+    if server.protocol != ConnectionProtocol::Ssh {
+        return Err("This action is only available for SSH server profiles.".to_string());
+    }
+    Ok(())
 }
 
 struct LocalShellSession {
@@ -638,6 +647,7 @@ async fn ssh_connect(
         .get_server(&server_id)
         .await
         .ok_or_else(|| format!("Server not found: {}", server_id))?;
+    ensure_ssh_protocol(&server)?;
 
     apply_auth_overrides(&mut server, username_override, password_override);
 
@@ -646,6 +656,33 @@ async fn ssh_connect(
 
     ssh_mgr
         .connect(&server, app, c, r)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn telnet_connect(
+    server_id: String,
+    cols: Option<u32>,
+    rows: Option<u32>,
+    telnet_mgr: State<'_, TelnetSessionManager>,
+    config: State<'_, ConfigStore>,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
+    let server = config
+        .get_server(&server_id)
+        .await
+        .ok_or_else(|| format!("Server not found: {}", server_id))?;
+
+    if server.protocol != ConnectionProtocol::Telnet {
+        return Err("Selected server is not configured for Telnet.".to_string());
+    }
+
+    let c = cols.unwrap_or(80);
+    let r = rows.unwrap_or(24);
+
+    telnet_mgr
+        .connect(&server, None, app, c, r)
         .await
         .map_err(|e| e.to_string())
 }
@@ -661,6 +698,54 @@ async fn ssh_clear_known_host(
         .ok_or_else(|| format!("Server not found: {}", server_id))?;
 
     clear_known_host_impl(&server.host, server.port).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn telnet_write(
+    session_id: String,
+    data: Vec<u8>,
+    telnet_mgr: State<'_, TelnetSessionManager>,
+) -> Result<(), String> {
+    telnet_mgr
+        .write(&session_id, &data)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn telnet_write_text(
+    session_id: String,
+    data: String,
+    telnet_mgr: State<'_, TelnetSessionManager>,
+) -> Result<(), String> {
+    telnet_mgr
+        .write(&session_id, data.as_bytes())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn telnet_resize(
+    session_id: String,
+    cols: u32,
+    rows: u32,
+    telnet_mgr: State<'_, TelnetSessionManager>,
+) -> Result<(), String> {
+    telnet_mgr
+        .resize(&session_id, cols, rows)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn telnet_disconnect(
+    session_id: String,
+    telnet_mgr: State<'_, TelnetSessionManager>,
+) -> Result<(), String> {
+    telnet_mgr
+        .disconnect(&session_id)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -973,6 +1058,7 @@ async fn ssh_probe_metrics(
         .get_server(&server_id)
         .await
         .ok_or_else(|| format!("Server not found: {}", server_id))?;
+    ensure_ssh_protocol(&server)?;
 
     collect_metrics(&server).await.map_err(|e| e.to_string())
 }
@@ -989,6 +1075,7 @@ async fn sftp_list_dir(
         .get_server(&server_id)
         .await
         .ok_or_else(|| format!("Server not found: {}", server_id))?;
+    ensure_ssh_protocol(&server)?;
     apply_auth_overrides(&mut server, username_override, password_override);
 
     sftp_list_dir_impl(&server, path)
@@ -1009,6 +1096,7 @@ async fn sftp_upload_file(
         .get_server(&server_id)
         .await
         .ok_or_else(|| format!("Server not found: {}", server_id))?;
+    ensure_ssh_protocol(&server)?;
     apply_auth_overrides(&mut server, username_override, password_override);
 
     sftp_upload_file_impl(&server, local_path, remote_path)
@@ -1029,6 +1117,7 @@ async fn sftp_download_file(
         .get_server(&server_id)
         .await
         .ok_or_else(|| format!("Server not found: {}", server_id))?;
+    ensure_ssh_protocol(&server)?;
     apply_auth_overrides(&mut server, username_override, password_override);
 
     sftp_download_file_impl(&server, remote_path, local_path)
@@ -1049,6 +1138,7 @@ async fn sftp_rename_entry(
         .get_server(&server_id)
         .await
         .ok_or_else(|| format!("Server not found: {}", server_id))?;
+    ensure_ssh_protocol(&server)?;
     apply_auth_overrides(&mut server, username_override, password_override);
 
     sftp_rename_entry_impl(&server, old_path, new_path)
@@ -1069,6 +1159,7 @@ async fn sftp_delete_entry(
         .get_server(&server_id)
         .await
         .ok_or_else(|| format!("Server not found: {}", server_id))?;
+    ensure_ssh_protocol(&server)?;
     apply_auth_overrides(&mut server, username_override, password_override);
 
     sftp_delete_entry_impl(&server, path, is_dir)
@@ -1088,6 +1179,7 @@ async fn sftp_create_dir(
         .get_server(&server_id)
         .await
         .ok_or_else(|| format!("Server not found: {}", server_id))?;
+    ensure_ssh_protocol(&server)?;
     apply_auth_overrides(&mut server, username_override, password_override);
 
     sftp_create_dir_impl(&server, path)
@@ -1107,6 +1199,7 @@ async fn sftp_read_file(
         .get_server(&server_id)
         .await
         .ok_or_else(|| format!("Server not found: {}", server_id))?;
+    ensure_ssh_protocol(&server)?;
     apply_auth_overrides(&mut server, username_override, password_override);
 
     sftp_read_file_impl(&server, path)
@@ -1127,6 +1220,7 @@ async fn sftp_write_file(
         .get_server(&server_id)
         .await
         .ok_or_else(|| format!("Server not found: {}", server_id))?;
+    ensure_ssh_protocol(&server)?;
     apply_auth_overrides(&mut server, username_override, password_override);
 
     sftp_write_file_impl(&server, path, content)
@@ -2080,6 +2174,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .manage(ConfigStore::new())
         .manage(SshSessionManager::new())
+        .manage(TelnetSessionManager::new())
         .manage(LocalShellManager::new())
         .invoke_handler(tauri::generate_handler![
             get_servers,
@@ -2090,11 +2185,16 @@ fn main() {
             delete_folder,
             reorder_servers,
             ssh_connect,
+            telnet_connect,
             ssh_clear_known_host,
             ssh_write,
             ssh_write_text,
             ssh_resize,
             ssh_disconnect,
+            telnet_write,
+            telnet_write_text,
+            telnet_resize,
+            telnet_disconnect,
             local_shell_connect,
             local_shell_write,
             local_shell_write_text,

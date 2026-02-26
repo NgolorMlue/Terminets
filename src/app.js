@@ -88,6 +88,7 @@ const browserInvoke = async (cmd, args) => {
   if (cmd === 'ssh_probe_metrics') throw new Error('Metrics refresh requires the desktop app');
   if (cmd === 'ssh_clear_known_host') return 0;
   if (cmd === 'ssh_connect') throw new Error('SSH requires the desktop app');
+  if (cmd.startsWith('telnet_')) throw new Error('Telnet requires the desktop app');
   if (cmd === 'open_external_url') {
     const url = String(args?.url || '').trim();
     if (/^https?:\/\//i.test(url)) window.open(url, '_blank', 'noopener,noreferrer');
@@ -137,6 +138,15 @@ const SERVER_ICON_VALUE_SET = new Set(SERVER_ICON_OPTIONS.map((option) => option
 const SERVER_ICON_OPTIONS_HTML = SERVER_ICON_OPTIONS
   .map((option) => `<option value="${option.value}">${option.glyph} ${option.label}</option>`)
   .join('');
+
+function normalizeConnectionProtocol(value) {
+  const protocol = String(value || 'ssh').toLowerCase();
+  return protocol === 'telnet' ? 'telnet' : 'ssh';
+}
+
+function serverProtocol(server) {
+  return normalizeConnectionProtocol(server?._raw?.protocol ?? server?.protocol);
+}
 
 function normalizeFolderName(value) {
   const name = String(value || '').trim();
@@ -1485,6 +1495,10 @@ function closeSftpBrowserTab(e) {
 function openSftpBrowserTab(serverId) {
   const srv = SRV.find((s) => s.id === serverId);
   if (!srv) return;
+  if (serverProtocol(srv) !== 'ssh') {
+    window.alert('SFTP is available only for SSH servers.');
+    return;
+  }
 
   if (!sftpBrowserTab.tabBtnEl) {
     const btn = document.createElement('div');
@@ -1590,8 +1604,10 @@ function refreshAddBtn() {
   const btn = document.getElementById('tab-add-btn');
   if (!btn) return;
   btn.classList.remove('disabled');
-  btn.dataset.tip = selId !== null
-    ? 'Left click: New SSH tab. Right click: More options.'
+  const srv = selId !== null ? SRV.find((s) => s.id === selId) : null;
+  const protocolLabel = srv ? String(serverProtocol(srv)).toUpperCase() : 'server';
+  btn.dataset.tip = srv
+    ? `Left click: New ${protocolLabel} tab. Right click: More options.`
     : 'Right click: Choose terminal type';
   updateTabAddMenuState();
 }
@@ -1610,9 +1626,12 @@ function updateTabAddMenuState() {
   const srv = selId !== null ? SRV.find((s) => s.id === selId) : null;
   const enabled = Boolean(srv);
   sshBtn.classList.toggle('disabled', !enabled);
-  sshBtn.textContent = enabled
-    ? `New SSH Connection (${srv.name})`
-    : 'New SSH Connection (Select a server)';
+  if (!enabled) {
+    sshBtn.textContent = 'New Server Connection (Select a server)';
+    return;
+  }
+  const protocolLabel = String(serverProtocol(srv)).toUpperCase();
+  sshBtn.textContent = `New ${protocolLabel} Connection (${srv.name})`;
 }
 
 function hideTabAddMenu() {
@@ -1795,11 +1814,17 @@ function showServerContextMenu(x, y, serverId) {
   menu.dataset.serverId = server.id;
   menu.innerHTML = [
     '<button class="sftp-menu-item" data-action="new_terminal">New Terminal</button>',
-    '<button class="sftp-menu-item" data-action="open_sftp">Open SFTP</button>',
-    '<button class="sftp-menu-item" data-action="connect_as">Connect as</button>',
+    ...(serverProtocol(server) === 'ssh'
+      ? ['<button class="sftp-menu-item" data-action="open_sftp">Open SFTP</button>']
+      : []),
+    ...(serverProtocol(server) === 'ssh'
+      ? ['<button class="sftp-menu-item" data-action="connect_as">Connect as</button>']
+      : []),
     '<div class="sftp-menu-sep"></div>',
     '<button class="sftp-menu-item" data-action="edit_config">Edit Config</button>',
-    '<button class="sftp-menu-item" data-action="clear_known_host">Clear Host Key</button>',
+    ...(serverProtocol(server) === 'ssh'
+      ? ['<button class="sftp-menu-item" data-action="clear_known_host">Clear Host Key</button>']
+      : []),
     '<button class="sftp-menu-item" data-action="rename">Rename</button>',
     '<button class="sftp-menu-item danger" data-action="delete">Delete</button>',
     '<div class="sftp-menu-sep"></div>',
@@ -1831,6 +1856,7 @@ async function saveServerModel(server, overrides = {}) {
     host: server.host,
     port: server.port,
     username: server.username,
+    protocol: normalizeConnectionProtocol(server.protocol || server?._raw?.protocol),
     icon: normalizeServerIcon(server.icon || server?._raw?.icon),
     location: server.loc,
     lat: server.lat,
@@ -1927,6 +1953,7 @@ async function runServerContextAction(action, serverId) {
       [
         `Name: ${server.name}`,
         `Host: ${server.host}:${server.port}`,
+        `Protocol: ${String(server.protocol || 'ssh').toUpperCase()}`,
         `Username: ${server.username}`,
         `Icon: ${serverIconLabel(server.icon)}`,
         `Folder: ${folderNameById(server.folderId) || '\u2014'}`,
@@ -1992,6 +2019,7 @@ function selectedSftpServer() {
   if (selId === null) throw new Error('Select a node first');
   const srv = SRV.find(s => s.id === selId);
   if (!srv) throw new Error('Selected server no longer exists');
+  if (serverProtocol(srv) !== 'ssh') throw new Error('SFTP is only available for SSH servers.');
   return srv;
 }
 
@@ -2007,6 +2035,10 @@ function cacheSftpCredentials(serverId, username, password = null) {
 }
 
 function resolveSftpAuthOverrides(server) {
+  if (serverProtocol(server) === 'telnet') {
+    throw new Error('SFTP is available only for SSH servers.');
+  }
+
   const cached = sftpCredentialCache.get(server.id) || {};
   const configuredUsername = String(server.username || '').trim();
   const username = String(cached.username || configuredUsername).trim();
@@ -2601,6 +2633,12 @@ function showStaticSftpEmpty(message = 'Select a node to browse files') {
 }
 
 function showStaticSftpForServer() {
+  const selected = SRV.find((s) => s.id === selId);
+  if (!selected || serverProtocol(selected) !== 'ssh') {
+    showStaticSftpEmpty('SFTP is only available for SSH servers.');
+    return;
+  }
+
   hideSftpContextMenu();
   const emptyEl = document.getElementById('sftp-empty');
   const shellEl = document.getElementById('sftp-shell');
@@ -2803,6 +2841,8 @@ function addTermTab(options = {}) {
   if (targetServerId === null) return;
   const s = SRV.find(sv => sv.id === targetServerId);
   if (!s) return;
+  const remoteProtocol = serverProtocol(s);
+  const remoteProtocolLabel = remoteProtocol.toUpperCase();
   const usernameOverride = typeof options.usernameOverride === 'string' && options.usernameOverride.trim()
     ? options.usernameOverride.trim()
     : null;
@@ -2841,7 +2881,7 @@ function addTermTab(options = {}) {
       <div class="term-info">
         <div class="term-srv-dot" id="term-dot-${tid}" style="background:${sDot('unknown')};box-shadow:0 0 6px ${sDot('unknown')}"></div>
         <span class="term-srv-name">${s.name}</span>
-        <span class="term-srv-ip">${s.host}:${s.port}</span>
+        <span class="term-srv-ip">${s.host}:${s.port} · ${remoteProtocolLabel}</span>
         <span class="term-cross-badge" id="cross-badge-${tid}" style="display:none">PINNED \u00b7 CROSS-SERVER</span>
         <span class="term-conn-status" id="conn-status-${tid}" style="margin-left:8px;font-size:9px;color:var(--warn);letter-spacing:1px">CONNECTING\u2026</span>
       </div>
@@ -2863,6 +2903,7 @@ function addTermTab(options = {}) {
 
   termTabs[tid] = {
     mode: 'ssh',
+    remoteProtocol,
     srvId: s.id, srv: s, pinned: false,
     historyId,
     usernameOverride,
@@ -2878,15 +2919,17 @@ function addTermTab(options = {}) {
     outputFlushTimer: null,
   };
 
-  trackRecentSshSession({
-    id: historyId,
-    openedAtMs: Date.now(),
-    serverId: s.id,
-    serverName: s.name,
-    host: s.host,
-    port: s.port,
-    username: usernameOverride || s.username || '',
-  });
+  if (remoteProtocol === 'ssh') {
+    trackRecentSshSession({
+      id: historyId,
+      openedAtMs: Date.now(),
+      serverId: s.id,
+      serverName: s.name,
+      host: s.host,
+      port: s.port,
+      username: usernameOverride || s.username || '',
+    });
+  }
 
   setActiveTab(tid);
   initTermSession(tid, s, usernameOverride, forceUsernamePrompt);
@@ -3133,12 +3176,29 @@ function clearTerminalIoQueues(tab) {
   tab.pendingOutput = [];
 }
 
+function remoteTabProtocol(tab) {
+  return normalizeConnectionProtocol(tab?.remoteProtocol || 'ssh');
+}
+
+function remoteCommand(tab, action) {
+  return `${remoteTabProtocol(tab)}_${action}`;
+}
+
+function remoteEventPrefix(tab) {
+  return remoteTabProtocol(tab);
+}
+
 /* ══════════════════════════════════════════════════════════
    INIT TERMINAL SESSION (real SSH via Tauri)
 ══════════════════════════════════════════════════════════ */
 async function initTermSession(tid, serverConfig, usernameOverride = null, forceUsernamePrompt = false) {
   const t = termTabs[tid];
   if (!t) return;
+  const remoteProtocol = remoteTabProtocol(t);
+  const eventPrefix = remoteEventPrefix(t);
+  const writeCommand = remoteCommand(t, 'write_text');
+  const resizeCommand = remoteCommand(t, 'resize');
+  const connectCommand = remoteCommand(t, 'connect');
 
   const container = document.getElementById(`xterm-${tid}`);
 
@@ -3193,14 +3253,14 @@ async function initTermSession(tid, serverConfig, usernameOverride = null, force
     // Ctrl+Shift+V → paste from clipboard
     if (e.ctrlKey && e.shiftKey && e.code === 'KeyV') {
       navigator.clipboard.readText().then((text) => {
-        if (text) queueTerminalInput(t, 'ssh_write_text', text);
+        if (text) queueTerminalInput(t, writeCommand, text);
       });
       return false;
     }
     // Ctrl+V (without shift) → also paste for convenience
     if (e.ctrlKey && !e.shiftKey && e.code === 'KeyV') {
       navigator.clipboard.readText().then((text) => {
-        if (text) queueTerminalInput(t, 'ssh_write_text', text);
+        if (text) queueTerminalInput(t, writeCommand, text);
       });
       return false;
     }
@@ -3214,73 +3274,77 @@ async function initTermSession(tid, serverConfig, usernameOverride = null, force
   t.terminal = term;
   t.fitAddon = fitAddon;
 
-  const creds = await resolveTerminalCredentials(term, serverConfig, usernameOverride, forceUsernamePrompt);
-  if (creds.cancelled) {
-    term.writeln('\x1b[38;2;58;85;112mConnection cancelled.\x1b[0m');
-    updateTabStatus(tid, 'disconnected');
-    return;
-  }
+  let connectUsername = '';
+  let passwordOverride = null;
 
-  const connectUsername = creds.username;
-  const passwordOverride = creds.passwordOverride;
-  t.usernameOverride = connectUsername;
-  t.forceUsernamePrompt = false;
-  cacheSftpCredentials(serverConfig.id, connectUsername, passwordOverride);
-  if (t.mode === 'ssh' && t.historyId) {
-    trackRecentSshSession({
-      id: t.historyId,
-      openedAtMs: Date.now(),
-      serverId: serverConfig.id,
-      serverName: serverConfig.name,
-      host: serverConfig.host,
-      port: serverConfig.port,
-      username: connectUsername,
-    });
-  }
+  if (remoteProtocol === 'ssh') {
+    const creds = await resolveTerminalCredentials(term, serverConfig, usernameOverride, forceUsernamePrompt);
+    if (creds.cancelled) {
+      term.writeln('\x1b[38;2;58;85;112mConnection cancelled.\x1b[0m');
+      updateTabStatus(tid, 'disconnected');
+      return;
+    }
 
-  term.writeln('\x1b[38;2;0;191;255m\u2592 Connecting to ' + serverConfig.name + ' (' + serverConfig.host + ':' + serverConfig.port + ') as ' + connectUsername + '\u2026\x1b[0m');
+    connectUsername = creds.username;
+    passwordOverride = creds.passwordOverride;
+    t.usernameOverride = connectUsername;
+    t.forceUsernamePrompt = false;
+    cacheSftpCredentials(serverConfig.id, connectUsername, passwordOverride);
+    if (t.mode === 'ssh' && t.historyId) {
+      trackRecentSshSession({
+        id: t.historyId,
+        openedAtMs: Date.now(),
+        serverId: serverConfig.id,
+        serverName: serverConfig.name,
+        host: serverConfig.host,
+        port: serverConfig.port,
+        username: connectUsername,
+      });
+    }
+    term.writeln('\x1b[38;2;0;191;255m\u2592 Connecting via SSH to ' + serverConfig.name + ' (' + serverConfig.host + ':' + serverConfig.port + ') as ' + connectUsername + '\u2026\x1b[0m');
+  } else {
+    t.usernameOverride = null;
+    t.forceUsernamePrompt = false;
+    term.writeln('\x1b[38;2;0;191;255m\u2592 Connecting via TELNET to ' + serverConfig.name + ' (' + serverConfig.host + ':' + serverConfig.port + ')\u2026\x1b[0m');
+  }
 
   try {
-    // Connect via Rust backend
     const connectPayload = {
       serverId: serverConfig.id,
       cols: term.cols,
       rows: term.rows,
     };
-    if (connectUsername) connectPayload.usernameOverride = connectUsername;
-    if (passwordOverride !== null) connectPayload.passwordOverride = passwordOverride;
-    const sessionId = await invoke('ssh_connect', connectPayload);
+    if (remoteProtocol === 'ssh') {
+      if (connectUsername) connectPayload.usernameOverride = connectUsername;
+      if (passwordOverride !== null) connectPayload.passwordOverride = passwordOverride;
+    }
+    const sessionId = await invoke(connectCommand, connectPayload);
 
     t.sessionId = sessionId;
 
-    // Update connection status
     updateTabStatus(tid, 'connected');
 
-    // Listen for SSH data from backend
-    t.unlisten = await listen(`ssh-data-${sessionId}`, (event) => {
+    t.unlisten = await listen(`${eventPrefix}-data-${sessionId}`, (event) => {
       queueTerminalOutput(t, event.payload);
     });
 
-    // Listen for EOF / channel close
-    t.unlistenEof = await listen(`ssh-eof-${sessionId}`, () => {
+    t.unlistenEof = await listen(`${eventPrefix}-eof-${sessionId}`, () => {
       term.writeln('\r\n\x1b[38;2;245;166;35m\u2592 Connection closed by remote host.\x1b[0m');
       updateTabStatus(tid, 'disconnected');
     });
 
-    t.unlistenClosed = await listen(`ssh-closed-${sessionId}`, () => {
+    t.unlistenClosed = await listen(`${eventPrefix}-closed-${sessionId}`, () => {
       term.writeln('\r\n\x1b[38;2;255;59;92m\u2592 Connection lost.\x1b[0m');
       updateTabStatus(tid, 'disconnected');
     });
 
-    // Send user keystrokes to backend
     term.onData((data) => {
-      queueTerminalInput(t, 'ssh_write_text', data);
+      queueTerminalInput(t, writeCommand, data);
     });
 
-    // Handle terminal resize
     term.onResize(({ cols, rows }) => {
       if (!t.sessionId) return;
-      invoke('ssh_resize', { sessionId: t.sessionId, cols, rows })
+      invoke(resizeCommand, { sessionId: t.sessionId, cols, rows })
         .catch(() => { });
     });
 
@@ -3434,7 +3498,7 @@ function updateTabStatus(tid, status) {
   if (statusEl) { statusEl.textContent = c.text; statusEl.style.color = c.color; }
   if (dot) { dot.style.background = c.dotColor; dot.style.boxShadow = `0 0 5px ${c.dotColor}`; }
   if (topDot) { topDot.style.background = c.dotColor; topDot.style.boxShadow = `0 0 6px ${c.dotColor}`; }
-  if (t.mode === 'ssh') {
+  if (t.mode === 'ssh' && remoteTabProtocol(t) === 'ssh') {
     maybeRenderSelectedMetrics();
   }
 }
@@ -3464,11 +3528,10 @@ async function closeTab(e, tid) {
   const t = termTabs[tid]; if (!t) return;
   const wasActive = activeTabId === tid;
   if (t.mode === 'local') flushTerminalInput(t, 'local_shell_write_text');
-  else flushTerminalInput(t, 'ssh_write_text');
+  else flushTerminalInput(t, remoteCommand(t, 'write_text'));
 
-  // Clean up SSH session
   if (t.sessionId) {
-    const disconnectCmd = t.mode === 'local' ? 'local_shell_disconnect' : 'ssh_disconnect';
+    const disconnectCmd = t.mode === 'local' ? 'local_shell_disconnect' : remoteCommand(t, 'disconnect');
     try { await invoke(disconnectCmd, { sessionId: t.sessionId }); } catch { }
   }
   // Clean up listeners
@@ -3501,11 +3564,10 @@ function termClear(tid) {
 async function termReconnect(tid) {
   const t = termTabs[tid]; if (!t) return;
   if (t.mode === 'local') flushTerminalInput(t, 'local_shell_write_text');
-  else flushTerminalInput(t, 'ssh_write_text');
+  else flushTerminalInput(t, remoteCommand(t, 'write_text'));
 
-  // Disconnect old session
   if (t.sessionId) {
-    const disconnectCmd = t.mode === 'local' ? 'local_shell_disconnect' : 'ssh_disconnect';
+    const disconnectCmd = t.mode === 'local' ? 'local_shell_disconnect' : remoteCommand(t, 'disconnect');
     try { await invoke(disconnectCmd, { sessionId: t.sessionId }); } catch { }
     t.sessionId = null;
   }
@@ -3531,6 +3593,7 @@ function hasLiveSshSessionForServer(serverId) {
   if (!serverId) return false;
   return Object.values(termTabs).some((tab) => {
     return tab.mode === 'ssh'
+      && remoteTabProtocol(tab) === 'ssh'
       && tab.srvId === serverId
       && tab.connStatus === 'connected'
       && Boolean(tab.sessionId);
@@ -4461,11 +4524,18 @@ function createSettingsModal() {
           <input class="sf-input" id="sf-port" type="number" value="22">
         </div>
         <div class="sf-row">
+          <label class="sf-label">Protocol</label>
+          <select class="sf-input" id="sf-protocol">
+            <option value="ssh">SSH</option>
+            <option value="telnet">Telnet</option>
+          </select>
+        </div>
+        <div class="sf-row">
           <label class="sf-label">Username</label>
           <input class="sf-input" id="sf-username" placeholder="Leave empty to ask on connect">
         </div>
-        <div class="sf-row">
-          <label class="sf-label">Auth Method</label>
+        <div class="sf-row" id="sf-auth-row">
+          <label class="sf-label">Auth Method (SSH only)</label>
           <select class="sf-input" id="sf-auth-method">
             <option value="Key">SSH Key</option>
             <option value="Password">Password</option>
@@ -4523,6 +4593,7 @@ function createSettingsModal() {
   document.getElementById('sf-locate-btn').addEventListener('click', lookupHostLocation);
   document.getElementById('sf-get-location-btn').addEventListener('click', geocodeTypedLocation);
   document.getElementById('sf-auth-method').addEventListener('change', toggleAuthFields);
+  document.getElementById('sf-protocol').addEventListener('change', toggleAuthFields);
 }
 
 function openSettings() {
@@ -4559,11 +4630,11 @@ function renderServerList() {
     <div class="sl-item" data-id="${s.id}">
       <div class="sl-info">
         <div class="sl-name">${s.name}</div>
-        <div class="sl-detail">${s.username ? `${s.username}@` : ''}${s.host}:${s.port} \u00b7 ${folderNameById(s.folderId) || 'Ungrouped'} \u00b7 ${s.loc || 'Unspecified'}</div>
+        <div class="sl-detail">${s.username ? `${s.username}@` : ''}${s.host}:${s.port} \u00b7 ${String(s.protocol || 'ssh').toUpperCase()} \u00b7 ${folderNameById(s.folderId) || 'Ungrouped'} \u00b7 ${s.loc || 'Unspecified'}</div>
       </div>
       <div class="sl-actions">
         <button class="sl-edit-btn" data-id="${s.id}">Edit</button>
-        <button class="sl-clear-host-btn" data-id="${s.id}">Clear Host Key</button>
+        ${serverProtocol(s) === 'ssh' ? `<button class="sl-clear-host-btn" data-id="${s.id}">Clear Host Key</button>` : ''}
         <button class="sl-delete-btn" data-id="${s.id}">Delete</button>
       </div>
     </div>`).join('');
@@ -4609,6 +4680,7 @@ function showServerForm(server) {
   document.getElementById('sf-icon').value = normalizeServerIcon(server ? (server.icon || server?._raw?.icon) : 'server');
   document.getElementById('sf-host').value = server ? server.host : '';
   document.getElementById('sf-port').value = server ? server.port : 22;
+  document.getElementById('sf-protocol').value = normalizeConnectionProtocol(server ? serverProtocol(server) : 'ssh');
   document.getElementById('sf-username').value = server ? server.username : '';
   document.getElementById('sf-location').value = server ? server.loc : '';
   document.getElementById('sf-lat').value = server ? server.lat : '';
@@ -4643,10 +4715,13 @@ function hideServerForm() {
 }
 
 function toggleAuthFields() {
+  const protocol = normalizeConnectionProtocol(document.getElementById('sf-protocol')?.value || 'ssh');
   const method = document.getElementById('sf-auth-method').value;
-  document.getElementById('sf-key-row').style.display = method === 'Key' ? '' : 'none';
-  document.getElementById('sf-passphrase-row').style.display = method === 'Key' ? '' : 'none';
-  document.getElementById('sf-password-row').style.display = method === 'Password' ? '' : 'none';
+  const isSsh = protocol === 'ssh';
+  document.getElementById('sf-auth-row').style.display = isSsh ? '' : 'none';
+  document.getElementById('sf-key-row').style.display = isSsh && method === 'Key' ? '' : 'none';
+  document.getElementById('sf-passphrase-row').style.display = isSsh && method === 'Key' ? '' : 'none';
+  document.getElementById('sf-password-row').style.display = isSsh && method === 'Password' ? '' : 'none';
 }
 
 async function browseKeyFile() {
@@ -4723,6 +4798,7 @@ async function saveServerForm() {
   const icon = normalizeServerIcon(document.getElementById('sf-icon').value);
   const host = document.getElementById('sf-host').value.trim();
   const port = parseInt(document.getElementById('sf-port').value) || 22;
+  const protocol = normalizeConnectionProtocol(document.getElementById('sf-protocol').value);
   const username = document.getElementById('sf-username').value.trim();
   const location = document.getElementById('sf-location').value.trim();
   const lat = parseFloat(document.getElementById('sf-lat').value) || 0;
@@ -4736,21 +4812,26 @@ async function saveServerForm() {
   }
 
   let auth_method;
-  if (authMethod === 'Key') {
-    const keyPath = document.getElementById('sf-key-path').value.trim();
-    const passphrase = document.getElementById('sf-passphrase').value || null;
-    if (!keyPath) { showFormError('SSH key path is required.'); return; }
-    auth_method = { type: 'Key', key_path: keyPath, passphrase };
-  } else if (authMethod === 'Password') {
-    const password = document.getElementById('sf-password').value;
-    auth_method = { type: 'Password', password };
+  const existing = editingServerId ? SRV.find((item) => item.id === editingServerId) : null;
+  if (protocol === 'telnet') {
+    auth_method = existing?._raw?.auth_method || { type: 'Agent' };
   } else {
-    auth_method = { type: 'Agent' };
+    if (authMethod === 'Key') {
+      const keyPath = document.getElementById('sf-key-path').value.trim();
+      const passphrase = document.getElementById('sf-passphrase').value || null;
+      if (!keyPath) { showFormError('SSH key path is required.'); return; }
+      auth_method = { type: 'Key', key_path: keyPath, passphrase };
+    } else if (authMethod === 'Password') {
+      const password = document.getElementById('sf-password').value;
+      auth_method = { type: 'Password', password };
+    } else {
+      auth_method = { type: 'Agent' };
+    }
   }
 
   const server = {
     id: editingServerId || crypto.randomUUID(),
-    name, icon, host, port, username, auth_method, location, lat, lng, folder_id: folderId,
+    name, icon, host, port, username, protocol, auth_method, location, lat, lng, folder_id: folderId,
   };
 
   try {
@@ -4793,24 +4874,31 @@ async function loadServers() {
       Array.from(collapsedFolderIds).filter((id) => id === UNGROUPED_COLLAPSE_ID || FOLDERS.some((folder) => folder.id === id))
     );
     saveCollapsedFolders();
-    SRV = configs.map(c => ({
-      id: c.id,
-      name: c.name,
-      icon: normalizeServerIcon(c.icon),
-      host: c.host,
-      port: c.port,
-      username: c.username,
-      loc: c.location,
-      lat: normalizeCoordinate(c.lat),
-      lng: normalizeCoordinate(c.lng),
-      folderId: null,
-      status: 'unknown',
-      latencyMs: null,
-      resolvedIp: null,
-      statusReason: null,
-      authLabel: c.auth_method.type === 'Key' ? 'SSH Key' : c.auth_method.type === 'Password' ? 'Password' : 'Agent',
-      _raw: c,
-    }))
+    SRV = configs.map(c => {
+      const protocol = normalizeConnectionProtocol(c.protocol);
+      const authLabel = protocol === 'telnet'
+        ? 'Telnet'
+        : (c.auth_method.type === 'Key' ? 'SSH Key' : c.auth_method.type === 'Password' ? 'Password' : 'Agent');
+      return ({
+        id: c.id,
+        name: c.name,
+        icon: normalizeServerIcon(c.icon),
+        host: c.host,
+        port: c.port,
+        username: c.username,
+        protocol,
+        loc: c.location,
+        lat: normalizeCoordinate(c.lat),
+        lng: normalizeCoordinate(c.lng),
+        folderId: null,
+        status: 'unknown',
+        latencyMs: null,
+        resolvedIp: null,
+        statusReason: null,
+        authLabel,
+        _raw: c,
+      });
+    })
       .map((server) => ({
         ...server,
         folderId: normalizeFolderId(server._raw?.folder_id),

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tokio::sync::Mutex;
 
-use super::{AuthMethod, ConfigData, FolderConfig, ServerConfig};
+use super::{AuthMethod, ConfigData, ConnectionProtocol, FolderConfig, ServerConfig};
 
 const KEYRING_SERVICE: &str = "com.terminey.nodegrid";
 
@@ -69,6 +69,8 @@ struct PersistedServerConfig {
     host: String,
     port: u16,
     username: String,
+    #[serde(default = "default_connection_protocol")]
+    protocol: ConnectionProtocol,
     auth_method: PersistedAuthMethod,
     location: String,
     lat: f64,
@@ -79,6 +81,10 @@ struct PersistedServerConfig {
 
 fn default_server_icon() -> String {
     "server".to_string()
+}
+
+fn default_connection_protocol() -> ConnectionProtocol {
+    ConnectionProtocol::Ssh
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -183,6 +189,7 @@ fn to_runtime(data: PersistedConfigData) -> ConfigData {
             host: server.host,
             port: server.port,
             username: server.username,
+            protocol: server.protocol,
             auth_method: to_runtime_auth_method(&server.id, server.auth_method),
             location: server.location,
             lat: server.lat,
@@ -252,6 +259,7 @@ fn to_persisted(data: &ConfigData) -> Result<PersistedConfigData> {
                 host: server.host.clone(),
                 port: server.port,
                 username: server.username.clone(),
+                protocol: server.protocol.clone(),
                 auth_method: to_persisted_auth_method(server)?,
                 location: server.location.clone(),
                 lat: server.lat,
