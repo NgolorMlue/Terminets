@@ -86,6 +86,7 @@ const browserInvoke = async (cmd, args) => {
   if (cmd.startsWith('sftp_')) throw new Error('SFTP requires the desktop app');
   if (cmd === 'check_server_status') return { status: 'unknown', latency_ms: null, reason: 'Browser preview mode', ip: null };
   if (cmd === 'ssh_probe_metrics') throw new Error('Metrics refresh requires the desktop app');
+  if (cmd === 'ssh_clear_known_host') return 0;
   if (cmd === 'ssh_connect') throw new Error('SSH requires the desktop app');
   if (cmd === 'open_external_url') {
     const url = String(args?.url || '').trim();
@@ -1798,6 +1799,7 @@ function showServerContextMenu(x, y, serverId) {
     '<button class="sftp-menu-item" data-action="connect_as">Connect as</button>',
     '<div class="sftp-menu-sep"></div>',
     '<button class="sftp-menu-item" data-action="edit_config">Edit Config</button>',
+    '<button class="sftp-menu-item" data-action="clear_known_host">Clear Host Key</button>',
     '<button class="sftp-menu-item" data-action="rename">Rename</button>',
     '<button class="sftp-menu-item danger" data-action="delete">Delete</button>',
     '<div class="sftp-menu-sep"></div>',
@@ -1887,6 +1889,20 @@ async function runServerContextAction(action, serverId) {
       await loadServers();
     } catch (err) {
       window.alert(`Rename failed: ${String(err)}`);
+    }
+    return;
+  }
+
+  if (action === 'clear_known_host') {
+    const confirmed = window.confirm(
+      `Clear trusted host key for "${server.name}" (${server.host}:${server.port})?\n\nThe next connection will trust and store the current host key again.`
+    );
+    if (!confirmed) return;
+    try {
+      const removed = await invoke('ssh_clear_known_host', { serverId: server.id });
+      window.alert(`Known host entries cleared: ${Number(removed) || 0}`);
+    } catch (err) {
+      window.alert(`Clear host key failed: ${String(err)}`);
     }
     return;
   }
@@ -4547,6 +4563,7 @@ function renderServerList() {
       </div>
       <div class="sl-actions">
         <button class="sl-edit-btn" data-id="${s.id}">Edit</button>
+        <button class="sl-clear-host-btn" data-id="${s.id}">Clear Host Key</button>
         <button class="sl-delete-btn" data-id="${s.id}">Delete</button>
       </div>
     </div>`).join('');
@@ -4562,6 +4579,22 @@ function renderServerList() {
       await invoke('delete_server', { serverId: btn.dataset.id });
       await loadServers();
       renderServerList();
+    });
+  });
+  list.querySelectorAll('.sl-clear-host-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const server = SRV.find((s) => s.id === btn.dataset.id);
+      if (!server) return;
+      const confirmed = window.confirm(
+        `Clear trusted host key for "${server.name}" (${server.host}:${server.port})?\n\nThe next connection will trust and store the current host key again.`
+      );
+      if (!confirmed) return;
+      try {
+        const removed = await invoke('ssh_clear_known_host', { serverId: server.id });
+        window.alert(`Known host entries cleared: ${Number(removed) || 0}`);
+      } catch (error) {
+        window.alert(`Clear host key failed: ${String(error)}`);
+      }
     });
   });
 }

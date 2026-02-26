@@ -8,9 +8,13 @@ use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
 
 use crate::config::{AuthMethod, ServerConfig};
+use crate::ssh::host_key::verify_known_host;
 
 /// Handler for the russh client connection.
-struct ClientHandler;
+struct ClientHandler {
+    host: String,
+    port: u16,
+}
 
 #[async_trait::async_trait]
 impl client::Handler for ClientHandler {
@@ -18,10 +22,9 @@ impl client::Handler for ClientHandler {
 
     async fn check_server_key(
         &mut self,
-        _server_public_key: &key::PublicKey,
+        server_public_key: &key::PublicKey,
     ) -> std::result::Result<bool, Self::Error> {
-        // MVP: accept all host keys. TODO: implement known_hosts checking
-        Ok(true)
+        verify_known_host(&self.host, self.port, server_public_key)
     }
 }
 
@@ -74,7 +77,11 @@ impl SshSession {
         };
 
         let addr = format!("{}:{}", config.host, config.port);
-        let mut session = client::connect(Arc::new(ssh_config), &addr[..], ClientHandler)
+        let handler = ClientHandler {
+            host: config.host.clone(),
+            port: config.port,
+        };
+        let mut session = client::connect(Arc::new(ssh_config), &addr[..], handler)
             .await
             .map_err(|e| anyhow::anyhow!("SSH connect failed: {}", e))?;
 

@@ -9,8 +9,12 @@ use russh_keys::key;
 use serde::Serialize;
 
 use crate::config::{AuthMethod, ServerConfig};
+use crate::ssh::host_key::verify_known_host;
 
-struct ClientHandler;
+struct ClientHandler {
+    host: String,
+    port: u16,
+}
 
 #[async_trait::async_trait]
 impl client::Handler for ClientHandler {
@@ -18,9 +22,9 @@ impl client::Handler for ClientHandler {
 
     async fn check_server_key(
         &mut self,
-        _server_public_key: &key::PublicKey,
+        server_public_key: &key::PublicKey,
     ) -> std::result::Result<bool, Self::Error> {
-        Ok(true)
+        verify_known_host(&self.host, self.port, server_public_key)
     }
 }
 
@@ -99,7 +103,11 @@ async fn connect_authenticated(config: &ServerConfig) -> Result<client::Handle<C
         ..Default::default()
     };
     let addr = format!("{}:{}", config.host, config.port);
-    let mut session = client::connect(Arc::new(ssh_config), &addr[..], ClientHandler)
+    let handler = ClientHandler {
+        host: config.host.clone(),
+        port: config.port,
+    };
+    let mut session = client::connect(Arc::new(ssh_config), &addr[..], handler)
         .await
         .map_err(|e| anyhow::anyhow!("SSH connect failed: {}", e))?;
 

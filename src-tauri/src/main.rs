@@ -8,6 +8,7 @@ use config::store::ConfigStore;
 use config::{AuthMethod, FolderConfig, ServerConfig};
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
+use ssh::host_key::clear_known_host as clear_known_host_impl;
 use ssh::manager::SshSessionManager;
 use ssh::probe::{collect_metrics, ServerMetricsSnapshot};
 use ssh::sftp::{
@@ -647,6 +648,19 @@ async fn ssh_connect(
         .connect(&server, app, c, r)
         .await
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn ssh_clear_known_host(
+    server_id: String,
+    config: State<'_, ConfigStore>,
+) -> Result<u32, String> {
+    let server = config
+        .get_server(&server_id)
+        .await
+        .ok_or_else(|| format!("Server not found: {}", server_id))?;
+
+    clear_known_host_impl(&server.host, server.port).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -2076,6 +2090,7 @@ fn main() {
             delete_folder,
             reorder_servers,
             ssh_connect,
+            ssh_clear_known_host,
             ssh_write,
             ssh_write_text,
             ssh_resize,

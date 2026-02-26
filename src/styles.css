@@ -1256,12 +1256,13 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
 .sl-name{font-size:13px;font-weight:700;color:var(--text);letter-spacing:.5px}
 .sl-detail{font-family:'JetBrains Mono',monospace;font-size:9px;color:var(--muted);margin-top:2px}
 .sl-actions{display:flex;gap:5px;flex-shrink:0}
-.sl-edit-btn,.sl-delete-btn{
+.sl-edit-btn,.sl-clear-host-btn,.sl-delete-btn{
   padding:4px 10px;background:none;border:1px solid var(--border);
   color:var(--text2);font-family:'JetBrains Mono',monospace;font-size:9px;
   letter-spacing:1px;border-radius:3px;cursor:pointer;transition:all .15s;
 }
 .sl-edit-btn:hover{border-color:var(--accent);color:var(--accent)}
+.sl-clear-host-btn:hover{border-color:#ffd84d;color:#ffd84d}
 .sl-delete-btn:hover{border-color:var(--danger);color:var(--danger)}
 
 /* Server form */
