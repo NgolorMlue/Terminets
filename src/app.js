@@ -7,6 +7,8 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 import RFB from './assets/novnc/rfb.js';
 import {
   FOLDER_COLLAPSE_STORAGE_KEY,
@@ -36,6 +38,7 @@ import {
   withSystemFolders,
 } from './lib/server-model.js';
 import { askInputModal } from './lib/input-modal.js';
+import { showAlert, showConfirm, showDangerConfirm, showInput, showError } from './lib/modal-system.js';
 import {
   getServerMapCoords,
   hasValidMapCoords,
@@ -1090,7 +1093,7 @@ async function launchSessionShortcut(shortcut) {
       const command = buildExternalSessionCommand(shortcut.type, payload);
       await launchExternalCommandSession(command);
     } catch (error) {
-      window.alert(`Failed to launch saved ${shortcut.type.toUpperCase()} session: ${String(error)}`);
+      showError(`Failed to launch saved ${shortcut.type.toUpperCase()} session`, error);
     }
   }
 }
@@ -1495,7 +1498,7 @@ function openSftpBrowserTab(serverId) {
   const srv = SRV.find((s) => s.id === serverId);
   if (!srv) return;
   if (serverProtocol(srv) !== 'ssh') {
-    window.alert('SFTP is available only for SSH servers.');
+    showAlert({ title: 'SFTP Unavailable', message: 'SFTP is available only for SSH servers.', variant: 'warning' });
     return;
   }
 
@@ -1850,7 +1853,7 @@ async function runSessionContextAction(action, shortcutId) {
   }
 
   if (action === 'delete_shortcut') {
-    const ok = window.confirm(`Delete saved session "${sessionShortcutDisplayName(shortcut)}"?`);
+    const ok = await showDangerConfirm(`Delete saved session "${sessionShortcutDisplayName(shortcut)}"?`);
     if (!ok) return;
     removeSessionShortcut(shortcut.id);
   }
@@ -1910,32 +1913,32 @@ async function runFolderContextAction(action, folderId) {
       await invoke('save_folder', { folder: { id: folder.id, name } });
       await loadServers();
     } catch (error) {
-      window.alert(`Folder update failed: ${String(error)}`);
+      showError('Folder update failed', error);
     }
     return;
   }
 
   if (action === 'delete_folder') {
-    const first = window.confirm(`Delete folder "${folder.name}"?`);
+    const first = await showDangerConfirm(`Delete folder "${folder.name}"?`);
     if (!first) return;
-    const second = window.confirm(`Delete folder "${folder.name}" and ungroup its servers?`);
+    const second = await showDangerConfirm(`Delete folder "${folder.name}" and ungroup its servers?`);
     if (!second) return;
     try {
       await invoke('delete_folder', { folderId: folder.id });
       await loadServers();
     } catch (error) {
-      window.alert(`Delete folder failed: ${String(error)}`);
+      showError('Delete folder failed', error);
     }
   }
 }
 
 async function createFolderFromSidebar() {
-  const raw = window.prompt('New folder name:');
-  if (raw === null) return;
+  const raw = await showInput({ title: 'New Folder', label: 'Folder name', placeholder: 'Enter folder name' });
+  if (raw === null || raw === undefined) return;
   const name = normalizeFolderName(raw);
   if (!name) return;
   if (FOLDERS.some((folder) => folder.name.toLowerCase() === name.toLowerCase())) {
-    window.alert('Folder name already exists.');
+    showAlert({ title: 'Duplicate Name', message: 'Folder name already exists.', variant: 'warning' });
     return;
   }
   try {
@@ -1951,7 +1954,7 @@ async function createFolderFromSidebar() {
       renderFolderOptions();
     }
   } catch (error) {
-    window.alert(`Create folder failed: ${String(error)}`);
+    showError('Create folder failed', error);
   }
 }
 
@@ -2067,43 +2070,51 @@ async function runServerContextAction(action, serverId) {
       await saveServerModel(server, { name: nextName });
       await loadServers();
     } catch (err) {
-      window.alert(`Rename failed: ${String(err)}`);
+      showError('Rename failed', err);
     }
     return;
   }
 
   if (action === 'clear_known_host') {
-    const confirmed = window.confirm(
-      `Clear trusted host key for "${server.name}" (${server.host}:${server.port})?\n\nThe next connection will trust and store the current host key again.`
-    );
+    const confirmed = await showConfirm({
+      title: 'Clear Trusted Host Key',
+      message: `Clear trusted host key for "${server.name}" (${server.host}:${server.port})?\n\nThe next connection will trust and store the current host key again.`,
+      variant: 'warning',
+      confirmText: 'Clear',
+    });
     if (!confirmed) return;
     try {
       const removed = await invoke('ssh_clear_known_host', { serverId: server.id });
-      window.alert(`Known host entries cleared: ${Number(removed) || 0}`);
+      showAlert({ title: 'Host Key Cleared', message: `Known host entries cleared: ${Number(removed) || 0}`, variant: 'info' });
     } catch (err) {
-      window.alert(`Clear host key failed: ${String(err)}`);
+      showError('Clear host key failed', err);
     }
     return;
   }
 
   if (action === 'delete') {
-    const firstConfirm = window.confirm(`Delete server "${server.name}"?`);
+    const firstConfirm = await showDangerConfirm(`Delete server "${server.name}"?`);
     if (!firstConfirm) return;
-    const secondConfirm = window.confirm(`Delete "${server.name}" permanently? This cannot be undone.`);
+    const secondConfirm = await showDangerConfirm({
+      title: 'Confirm Permanent Deletion',
+      message: `Delete "${server.name}" permanently? This cannot be undone.`,
+      confirmText: 'Delete',
+    });
     if (!secondConfirm) return;
     try {
       await invoke('delete_server', { serverId: server.id });
       await loadServers();
     } catch (err) {
-      window.alert(`Delete failed: ${String(err)}`);
+      showError('Delete server failed', err);
     }
     return;
   }
 
   if (action === 'details') {
     const pingText = typeof server.latencyMs === 'number' ? `${server.latencyMs}ms` : '\u2014';
-    window.alert(
-      [
+    showAlert({
+      title: 'Server Details',
+      message: [
         `Name: ${server.name}`,
         `Host: ${server.host}:${server.port}`,
         `Protocol: ${String(server.protocol || 'ssh').toUpperCase()}`,
@@ -2115,8 +2126,9 @@ async function runServerContextAction(action, serverId) {
         `Status: ${server.status || 'unknown'}`,
         `Latency: ${pingText}`,
         `Auth: ${server.authLabel || '\u2014'}`,
-      ].join('\n')
-    );
+      ].join('\n'),
+      variant: 'info',
+    });
   }
 }
 
@@ -2282,9 +2294,15 @@ function resetSftpEditorState() {
   staticSftpState.editorChmod = '';
 }
 
-function confirmDiscardSftpEditorChanges() {
+async function confirmDiscardSftpEditorChanges() {
   if (!staticSftpState.editorDirty) return true;
-  return window.confirm('You have unsaved changes in the editor. Discard them?');
+  return await showConfirm({
+    title: 'Unsaved Changes',
+    message: 'You have unsaved changes in the editor. Discard them?',
+    variant: 'warning',
+    confirmText: 'Discard',
+    cancelText: 'Keep Editing',
+  });
 }
 
 function updateSftpPaneButtons() {
@@ -2335,10 +2353,13 @@ function renderSftpEditorPanel() {
   editorSaveEl.disabled = staticSftpState.editorLoading || staticSftpState.editorSaving || !staticSftpState.editorDirty;
 }
 
-function setSftpPane(mode, allowPrompt = true) {
+async function setSftpPane(mode, allowPrompt = true) {
   const next = mode === 'editor' ? 'editor' : 'files';
   if (next === staticSftpState.pane) return true;
-  if (next === 'files' && allowPrompt && !confirmDiscardSftpEditorChanges()) return false;
+  if (next === 'files' && allowPrompt) {
+    const canDiscard = await confirmDiscardSftpEditorChanges();
+    if (!canDiscard) return false;
+  }
   if (next === 'editor' && !staticSftpState.editorPath) return false;
   staticSftpState.pane = next;
   updateSftpPaneButtons();
@@ -2350,8 +2371,9 @@ async function openSftpEditorFile(entry) {
   if (!entry || entry.is_dir) return;
   const targetPath = String(entry.path || '').trim();
   if (!targetPath) return;
-  if (staticSftpState.editorPath && staticSftpState.editorPath !== targetPath && !confirmDiscardSftpEditorChanges()) {
-    return;
+  if (staticSftpState.editorPath && staticSftpState.editorPath !== targetPath) {
+    const canDiscard = await confirmDiscardSftpEditorChanges();
+    if (!canDiscard) return;
   }
 
   const srv = selectedSftpServer();
@@ -2361,7 +2383,7 @@ async function openSftpEditorFile(entry) {
   staticSftpState.editorDirty = false;
   staticSftpState.editorContent = '';
   staticSftpState.editorOriginal = '';
-  setSftpPane('editor', false);
+  await setSftpPane('editor', false);
   setStaticSftpStatus(`Loading file ${remoteBaseName(targetPath) || targetPath} ...`);
   updateSftpPaneButtons();
   renderSftpEditorPanel();
@@ -2409,7 +2431,7 @@ async function saveSftpEditorFile() {
     staticSftpState.editorChmod = String(result?.chmod || staticSftpState.editorChmod || '');
     setStaticSftpStatus(`Saved ${remoteBaseName(staticSftpState.editorPath) || staticSftpState.editorPath}`);
     await loadStaticSftpDir(staticSftpState.path || '.');
-    setSftpPane('editor', false);
+    await setSftpPane('editor', false);
   } catch (err) {
     setStaticSftpStatus(`Save failed: ${String(err)}`, true);
   } finally {
@@ -2419,8 +2441,9 @@ async function saveSftpEditorFile() {
   }
 }
 
-function closeSftpEditor() {
-  if (!setSftpPane('files', true)) return;
+async function closeSftpEditor() {
+  const closed = await setSftpPane('files', true);
+  if (!closed) return;
   resetSftpEditorState();
   updateSftpPaneButtons();
   renderSftpEditorPanel();
@@ -2619,7 +2642,7 @@ async function deleteSftpEntry(entry) {
   const path = String(entry.path || '').trim();
   if (!path) return;
   const label = remoteBaseName(path) || path;
-  const confirmed = window.confirm(`Delete ${entry.is_dir ? 'folder' : 'file'} "${label}"?`);
+  const confirmed = await showDangerConfirm(`Delete ${entry.is_dir ? 'folder' : 'file'} "${label}"?`);
   if (!confirmed) return;
 
   const srv = selectedSftpServer();
@@ -2640,8 +2663,8 @@ async function deleteSftpEntry(entry) {
 }
 
 async function createSftpFolder(parentDir) {
-  const folderNameRaw = window.prompt('New folder name:');
-  if (folderNameRaw === null) return;
+  const folderNameRaw = await showInput({ title: 'New Folder', label: 'Folder name', placeholder: 'Enter folder name' });
+  if (folderNameRaw === null || folderNameRaw === undefined) return;
   const folderName = folderNameRaw.trim().replace(/[\\/]/g, '');
   if (!folderName) return;
 
@@ -2664,8 +2687,8 @@ async function createSftpFolder(parentDir) {
 }
 
 async function createSftpFile(parentDir) {
-  const fileNameRaw = window.prompt('New file name:', 'new-file.txt');
-  if (fileNameRaw === null) return;
+  const fileNameRaw = await showInput({ title: 'New File', label: 'File name', defaultValue: 'new-file.txt', placeholder: 'Enter file name' });
+  if (fileNameRaw === null || fileNameRaw === undefined) return;
   const fileName = fileNameRaw.trim().replace(/[\\/]/g, '');
   if (!fileName) return;
 
@@ -3401,11 +3424,11 @@ async function vncReconnect(tid) {
 
   // Cleanup existing connection
   if (t.rfb) {
-    try { t.rfb.disconnect(); } catch {}
+    try { t.rfb.disconnect(); } catch { }
     t.rfb = null;
   }
   if (t.sessionId) {
-    try { await invoke('vnc_disconnect', { sessionId: t.sessionId }); } catch {}
+    try { await invoke('vnc_disconnect', { sessionId: t.sessionId }); } catch { }
   }
   if (t.unlistenConnected) { t.unlistenConnected(); t.unlistenConnected = null; }
   if (t.unlistenDisconnected) { t.unlistenDisconnected(); t.unlistenDisconnected = null; }
@@ -3531,7 +3554,7 @@ function flushTerminalInput(tab, command) {
   const text = tab.pendingInput;
   tab.pendingInput = '';
   if (!text || !tab.sessionId) return;
-  invoke(command, { sessionId: tab.sessionId, data: text }).catch(() => {});
+  invoke(command, { sessionId: tab.sessionId, data: text }).catch(() => { });
 }
 
 function queueTerminalInput(tab, command, text) {
@@ -3957,11 +3980,11 @@ async function closeTab(e, tid) {
   // VNC mode cleanup
   if (t.mode === 'vnc') {
     if (t.rfb) {
-      try { t.rfb.disconnect(); } catch {}
+      try { t.rfb.disconnect(); } catch { }
       t.rfb = null;
     }
     if (t.sessionId) {
-      try { await invoke('vnc_disconnect', { sessionId: t.sessionId }); } catch {}
+      try { await invoke('vnc_disconnect', { sessionId: t.sessionId }); } catch { }
     }
     if (t.unlistenConnected) t.unlistenConnected();
     if (t.unlistenDisconnected) t.unlistenDisconnected();
@@ -4256,9 +4279,9 @@ function renderMetrics(s) {
       ? `Live update every ${Math.round(METRICS_LIVE_REFRESH_INTERVAL_MS / 1000)}s · updated ${formatUpdatedAgo(liveState.lastUpdatedMs)}`
       : liveLinked
         ? `Live updates paused · updated ${formatUpdatedAgo(liveState.lastUpdatedMs)}`
-      : liveState.lastUpdatedMs
-        ? `Last update ${formatUpdatedAgo(liveState.lastUpdatedMs)} · manual refresh only`
-        : 'No data yet · press Refresh';
+        : liveState.lastUpdatedMs
+          ? `Last update ${formatUpdatedAgo(liveState.lastUpdatedMs)} · manual refresh only`
+          : 'No data yet · press Refresh';
   const metricsSource = liveActive ? 'Live telemetry' : (live ? 'Last captured' : 'No data');
   const osBadge = live?.os_name || 'Unknown';
   const kernelBadge = kernel || 'Unknown';
@@ -5662,15 +5685,18 @@ function renderServerList() {
     btn.addEventListener('click', async () => {
       const server = SRV.find((s) => s.id === btn.dataset.id);
       if (!server) return;
-      const confirmed = window.confirm(
-        `Clear trusted host key for "${server.name}" (${server.host}:${server.port})?\n\nThe next connection will trust and store the current host key again.`
-      );
+      const confirmed = await showConfirm({
+        title: 'Clear Trusted Host Key',
+        message: `Clear trusted host key for "${server.name}" (${server.host}:${server.port})?\n\nThe next connection will trust and store the current host key again.`,
+        variant: 'warning',
+        confirmText: 'Clear',
+      });
       if (!confirmed) return;
       try {
         const removed = await invoke('ssh_clear_known_host', { serverId: server.id });
-        window.alert(`Known host entries cleared: ${Number(removed) || 0}`);
+        showAlert({ title: 'Host Key Cleared', message: `Known host entries cleared: ${Number(removed) || 0}`, variant: 'info' });
       } catch (error) {
-        window.alert(`Clear host key failed: ${String(error)}`);
+        showError('Clear host key failed', error);
       }
     });
   });
@@ -6055,12 +6081,12 @@ document.querySelectorAll('#tab-add-menu .tab-add-menu-item').forEach((item) => 
   });
 });
 document.getElementById('tab-maximize-btn').addEventListener('click', () => toggleMaximize());
-document.getElementById('sftp-pane-files-btn').addEventListener('click', () => {
-  if (staticSftpState.pane === 'editor') closeSftpEditor();
-  else setSftpPane('files', false);
+document.getElementById('sftp-pane-files-btn').addEventListener('click', async () => {
+  if (staticSftpState.pane === 'editor') await closeSftpEditor();
+  else await setSftpPane('files', false);
 });
-document.getElementById('sftp-pane-editor-btn').addEventListener('click', () => {
-  if (staticSftpState.editorPath) setSftpPane('editor', false);
+document.getElementById('sftp-pane-editor-btn').addEventListener('click', async () => {
+  if (staticSftpState.editorPath) await setSftpPane('editor', false);
 });
 document.getElementById('sftp-view-list-btn').addEventListener('click', () => setSftpViewMode('list'));
 document.getElementById('sftp-view-grid-btn').addEventListener('click', () => setSftpViewMode('grid'));
@@ -6161,6 +6187,81 @@ renderSftpEditorPanel();
 setMainDashboardActive(true);
 renderMainDashboard();
 refreshAddBtn();
+
+// ══════════════════════════════════════════════════════════
+// KEYBOARD SHORTCUTS PANEL
+// ══════════════════════════════════════════════════════════
+
+const SHORTCUTS_DATA = [
+  { key: 'Ctrl + T', desc: 'New Terminal Tab' },
+  { key: 'Ctrl + W', desc: 'Close Current Tab' },
+  { key: 'Ctrl + Tab', desc: 'Next Tab' },
+  { key: 'Ctrl + Shift + Tab', desc: 'Previous Tab' },
+  { key: 'Ctrl + Shift + C', desc: 'Copy (Terminal)' },
+  { key: 'Ctrl + Shift + V', desc: 'Paste (Terminal)' },
+  { key: 'Ctrl + /', desc: 'Toggle Shortcuts Panel' },
+  { key: 'Escape', desc: 'Close Menus / Exit Input' },
+];
+
+let shortcutsPanelVisible = false;
+
+function createShortcutsPanel() {
+  if (document.getElementById('shortcuts-panel')) return;
+
+  const panel = document.createElement('div');
+  panel.id = 'shortcuts-panel';
+  panel.className = 'shortcuts-panel';
+  panel.style.display = 'none';
+  panel.innerHTML = `
+    <button class="shortcuts-panel-close" id="shortcuts-panel-close" aria-label="Close shortcuts panel">&times;</button>
+    <div class="shortcuts-panel-title">Keyboard Shortcuts</div>
+    <div class="shortcuts-list">
+      ${SHORTCUTS_DATA.map(s => `
+        <div class="shortcuts-item">
+          <span class="shortcuts-key">${escapeHtml(s.key)}</span>
+          <span class="shortcuts-desc">${escapeHtml(s.desc)}</span>
+        </div>
+      `).join('')}
+    </div>
+  `;
+  document.body.appendChild(panel);
+
+  document.getElementById('shortcuts-panel-close').addEventListener('click', toggleShortcutsPanel);
+}
+
+function createShortcutsToggle() {
+  if (document.getElementById('shortcuts-toggle')) return;
+
+  const btn = document.createElement('button');
+  btn.id = 'shortcuts-toggle';
+  btn.className = 'shortcuts-toggle';
+  btn.setAttribute('aria-label', 'Toggle keyboard shortcuts panel');
+  btn.setAttribute('title', 'Keyboard shortcuts (Ctrl+/)');
+  btn.innerHTML = '?';
+  btn.addEventListener('click', toggleShortcutsPanel);
+  document.body.appendChild(btn);
+}
+
+function toggleShortcutsPanel() {
+  shortcutsPanelVisible = !shortcutsPanelVisible;
+  const panel = document.getElementById('shortcuts-panel');
+  if (panel) {
+    panel.style.display = shortcutsPanelVisible ? 'block' : 'none';
+  }
+}
+
+// Add keyboard shortcut to toggle panel
+document.addEventListener('keydown', (ev) => {
+  // Ctrl+/ or Cmd+/ to toggle shortcuts panel
+  if ((ev.ctrlKey || ev.metaKey) && ev.key === '/') {
+    ev.preventDefault();
+    toggleShortcutsPanel();
+  }
+});
+
+// Initialize shortcuts panel
+createShortcutsPanel();
+createShortcutsToggle();
 
 // Initial load
 loadServers();
