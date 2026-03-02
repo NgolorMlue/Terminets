@@ -1,0 +1,72 @@
+<svg width="1200" height="320" viewBox="0 0 1200 320" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="nodegrid-logo-title nodegrid-logo-desc">
+  <title id="nodegrid-logo-title">NodeGrid logo</title>
+  <desc id="nodegrid-logo-desc">A cyber-style logo for NodeGrid combining a network grid icon with a terminal-inspired wordmark.</desc>
+  <defs>
+    <linearGradient id="nodegrid-logo-panel" x1="36" y1="34" x2="284" y2="286" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#121A26"/>
+      <stop offset="1" stop-color="#0B0F16"/>
+    </linearGradient>
+    <linearGradient id="nodegrid-logo-accent" x1="62" y1="54" x2="258" y2="250" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#00BFFF"/>
+      <stop offset="1" stop-color="#00FFAA"/>
+    </linearGradient>
+    <linearGradient id="nodegrid-logo-line" x1="74" y1="72" x2="246" y2="244" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#6EE6FF"/>
+      <stop offset="1" stop-color="#00FFAA"/>
+    </linearGradient>
+    <filter id="nodegrid-logo-glow" x="14" y="12" width="292" height="292" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feFlood flood-opacity="0" result="BackgroundImageFix"/>
+      <feBlend mode="normal" in="SourceGraphic" in2="BackgroundImageFix" result="shape"/>
+      <feGaussianBlur stdDeviation="10" result="effect1_foregroundBlur"/>
+    </filter>
+    <filter id="nodegrid-logo-nodeglow" x="38" y="38" width="244" height="244" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feFlood flood-opacity="0" result="BackgroundImageFix"/>
+      <feBlend mode="normal" in="SourceGraphic" in2="BackgroundImageFix" result="shape"/>
+      <feGaussianBlur stdDeviation="6" result="effect1_foregroundBlur"/>
+    </filter>
+  </defs>
+
+  <rect x="32" y="32" width="256" height="256" rx="46" fill="url(#nodegrid-logo-panel)"/>
+  <rect x="32.5" y="32.5" width="255" height="255" rx="45.5" stroke="#243550"/>
+
+  <g filter="url(#nodegrid-logo-glow)" opacity="0.5">
+    <rect x="56" y="56" width="208" height="208" rx="36" stroke="url(#nodegrid-logo-accent)" stroke-width="2"/>
+  </g>
+
+  <g opacity="0.9">
+    <path d="M92 104H228" stroke="#243550" stroke-width="2"/>
+    <path d="M92 160H228" stroke="#243550" stroke-width="2"/>
+    <path d="M92 216H228" stroke="#243550" stroke-width="2"/>
+    <path d="M104 92V228" stroke="#243550" stroke-width="2"/>
+    <path d="M160 92V228" stroke="#243550" stroke-width="2"/>
+    <path d="M216 92V228" stroke="#243550" stroke-width="2"/>
+  </g>
+
+  <g filter="url(#nodegrid-logo-nodeglow)">
+    <path d="M104 104L160 104L216 104L216 160L216 216L160 216L104 216L104 160L160 160L160 216" stroke="url(#nodegrid-logo-line)" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M126 136L154 160L126 184" stroke="#B8CCE0" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M172 188H202" stroke="#B8CCE0" stroke-width="9" stroke-linecap="round"/>
+    <circle cx="104" cy="104" r="8" fill="#00BFFF"/>
+    <circle cx="160" cy="104" r="8" fill="#73E4FF"/>
+    <circle cx="216" cy="104" r="8" fill="#00FFAA"/>
+    <circle cx="216" cy="160" r="8" fill="#73E4FF"/>
+    <circle cx="216" cy="216" r="8" fill="#00FFAA"/>
+    <circle cx="160" cy="216" r="8" fill="#73E4FF"/>
+    <circle cx="104" cy="216" r="8" fill="#00BFFF"/>
+    <circle cx="104" cy="160" r="8" fill="#73E4FF"/>
+    <circle cx="160" cy="160" r="8" fill="#B8CCE0"/>
+  </g>
+
+  <g transform="translate(352 64)">
+    <text x="0" y="88" fill="#00BFFF" font-family="'JetBrains Mono', 'IBM Plex Mono', monospace" font-size="84" font-weight="700" letter-spacing="8">NODE</text>
+    <text x="332" y="88" fill="#7A9AB8" font-family="'JetBrains Mono', 'IBM Plex Mono', monospace" font-size="84" font-weight="400">/</text>
+    <text x="392" y="88" fill="#B8CCE0" font-family="'JetBrains Mono', 'IBM Plex Mono', monospace" font-size="84" font-weight="700" letter-spacing="8">GRID</text>
+
+    <rect x="2" y="128" width="468" height="2" fill="#243550"/>
+    <circle cx="2" cy="129" r="2" fill="#00BFFF"/>
+    <circle cx="470" cy="129" r="2" fill="#00FFAA"/>
+
+    <text x="0" y="178" fill="#00FFAA" font-family="'JetBrains Mono', 'IBM Plex Mono', monospace" font-size="24" font-weight="600" letter-spacing="5">REMOTE INFRASTRUCTURE CONTROL</text>
+    <text x="0" y="222" fill="#7A9AB8" font-family="'JetBrains Mono', 'IBM Plex Mono', monospace" font-size="22" font-weight="400" letter-spacing="2">SSH  SFTP  TELNET  VNC  LOCAL SHELL</text>
+  </g>
+</svg>

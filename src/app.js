@@ -3,110 +3,85 @@
    Tauri 2 + russh + xterm.js
 ══════════════════════════════════════════════════════════ */
 
-// Static imports — Tauri packages are safe to import even without the runtime
-// (they only throw when *called*, not on import)
-import { invoke as tauriInvoke } from '@tauri-apps/api/core';
-import { listen as tauriListen } from '@tauri-apps/api/event';
-import { open as tauriOpen, save as tauriSave } from '@tauri-apps/plugin-dialog';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
-
-/* ── Tauri / Browser runtime detection ── */
-const isTauri = Boolean(window.__TAURI_INTERNALS__);
-
-// Browser-mode localStorage backend
-const STORAGE_KEY = 'nodegrid_servers';
-const FOLDER_STORAGE_KEY = 'nodegrid_folders';
-const FOLDER_COLLAPSE_STORAGE_KEY = 'nodegrid_folder_collapse';
-const UNGROUPED_COLLAPSE_ID = '__ungrouped__';
-const SESSION_FOLDER_ID = '__sessions__';
-const SESSION_FOLDER_NAME = 'Sessions';
-const SESSION_SHORTCUT_STORAGE_KEY = 'nodegrid_session_shortcuts';
-const SESSION_SHORTCUT_LIMIT = 300;
-const RECENT_SESSION_STORAGE_KEY = 'nodegrid_recent_local_sessions';
-const RECENT_SESSION_LIMIT = 20;
-const _get = () => { try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || []; } catch { return []; } };
-const _set = (l) => localStorage.setItem(STORAGE_KEY, JSON.stringify(l));
-const _getFolders = () => { try { return JSON.parse(localStorage.getItem(FOLDER_STORAGE_KEY)) || []; } catch { return []; } };
-const _setFolders = (l) => localStorage.setItem(FOLDER_STORAGE_KEY, JSON.stringify(l));
-
-const browserInvoke = async (cmd, args) => {
-  if (cmd === 'get_servers') return _get();
-  if (cmd === 'get_folders') return _getFolders();
-  if (cmd === 'save_server') {
-    const srv = args.server, list = _get(), idx = list.findIndex(s => s.id === srv.id);
-    if (idx >= 0) list[idx] = srv; else list.push(srv);
-    _set(list); return;
-  }
-  if (cmd === 'save_folder') {
-    const folder = args.folder;
-    const list = _getFolders();
-    const idx = list.findIndex((f) => f.id === folder.id);
-    if (idx >= 0) list[idx] = folder; else list.push(folder);
-    _setFolders(list);
-    return;
-  }
-  if (cmd === 'delete_server') { _set(_get().filter(s => s.id !== args.serverId)); return; }
-  if (cmd === 'delete_folder') {
-    const folderId = String(args.folderId || '');
-    _setFolders(_getFolders().filter((f) => f.id !== folderId));
-    const servers = _get().map((s) => (s.folder_id === folderId ? { ...s, folder_id: null } : s));
-    _set(servers);
-    return;
-  }
-  if (cmd === 'reorder_servers') {
-    const ids = Array.isArray(args?.serverIds) ? args.serverIds.map((id) => String(id)) : [];
-    if (!ids.length) return;
-    const list = _get();
-    const byId = new Map(list.map((server) => [String(server.id), server]));
-    const reordered = [];
-    ids.forEach((id) => {
-      if (byId.has(id)) {
-        reordered.push(byId.get(id));
-        byId.delete(id);
-      }
-    });
-    byId.forEach((server) => reordered.push(server));
-    _set(reordered);
-    return;
-  }
-  if (cmd === 'lookup_ip_location') throw new Error('Location lookup requires the desktop app');
-  if (cmd === 'geocode_location') throw new Error('Text location lookup requires the desktop app');
-  if (cmd === 'get_host_device_info') {
-    return {
-      hostname: 'Browser Preview',
-      os_name: navigator.platform || 'Unknown',
-      os_version: 'n/a',
-      arch: 'n/a',
-      cpu_cores: navigator.hardwareConcurrency || 0,
-      total_memory_mb: 0,
-      terminal_workspace: '.',
-    };
-  }
-  if (cmd === 'start_local_terminal') throw new Error('Local terminal requires the desktop app');
-  if (cmd.startsWith('local_shell_')) throw new Error('Local terminal requires the desktop app');
-  if (cmd.startsWith('sftp_')) throw new Error('SFTP requires the desktop app');
-  if (cmd === 'check_server_status') return { status: 'unknown', latency_ms: null, reason: 'Browser preview mode', ip: null };
-  if (cmd === 'ssh_probe_metrics') throw new Error('Metrics refresh requires the desktop app');
-  if (cmd === 'ssh_clear_known_host') return 0;
-  if (cmd === 'ssh_connect') throw new Error('SSH requires the desktop app');
-  if (cmd.startsWith('telnet_')) throw new Error('Telnet requires the desktop app');
-  if (cmd === 'open_external_url') {
-    const url = String(args?.url || '').trim();
-    if (/^https?:\/\//i.test(url)) window.open(url, '_blank', 'noopener,noreferrer');
-    return;
-  }
-};
-
-// Use real Tauri APIs in desktop, localStorage mock in browser
-const invoke = isTauri ? tauriInvoke : browserInvoke;
-const listen = isTauri ? tauriListen : async () => () => {};
-const open   = isTauri ? tauriOpen   : async () => null;
-const saveDialog = isTauri ? tauriSave : async () => null;
-
-if (!isTauri) console.warn('[NODE/GRID] Browser preview mode — SSH disabled, using localStorage');
+import RFB from './assets/novnc/rfb.js';
+import {
+  FOLDER_COLLAPSE_STORAGE_KEY,
+  RECENT_SESSION_LIMIT,
+  RECENT_SESSION_STORAGE_KEY,
+  SESSION_FOLDER_ID,
+  SESSION_FOLDER_NAME,
+  SESSION_SHORTCUT_LIMIT,
+  SESSION_SHORTCUT_STORAGE_KEY,
+  UNGROUPED_COLLAPSE_ID,
+  invoke,
+  isTauri,
+  listen,
+  open,
+  saveDialog,
+} from './lib/runtime.js';
+import {
+  SERVER_ICON_OPTIONS_HTML,
+  folderIconSvg,
+  isSessionFolderId,
+  normalizeConnectionProtocol,
+  normalizeFolderName,
+  normalizeServerIcon,
+  serverIconLabel,
+  serverIconSvg,
+  serverProtocol,
+  withSystemFolders,
+} from './lib/server-model.js';
+import { askInputModal } from './lib/input-modal.js';
+import {
+  getServerMapCoords,
+  hasValidMapCoords,
+  latencyColor,
+  normalizeCoordinate,
+  safeMapFlyTo,
+  sDot,
+} from './lib/map-helpers.js';
+import {
+  addSessionShortcut as addSessionShortcutEntry,
+  findLocalTabIdByHistoryId as findLocalTabIdByHistoryIdInTabs,
+  findSshTabIdByHistoryId as findSshTabIdByHistoryIdInTabs,
+  loadRecentSessions as loadRecentSessionsFromStorage,
+  loadSessionShortcuts as loadSessionShortcutsFromStorage,
+  normalizeRecentSessionEntry as normalizeRecentSessionEntryFromStorage,
+  normalizeSessionShortcutEntry,
+  normalizeSessionShortcutType,
+  recentSessionMeta,
+  removeMostRecentSession as removeMostRecentSessionEntry,
+  removeSessionShortcut as removeSessionShortcutEntry,
+  renderRecentSessionHistory as renderRecentSessionHistoryView,
+  saveRecentSessions as saveRecentSessionsToStorage,
+  saveSessionShortcuts as saveSessionShortcutsToStorage,
+  sessionShortcutDisplayName,
+  sessionShortcutMeta,
+  syncRecentSessionViewport as syncRecentSessionViewportView,
+  trackRecentSession as trackRecentSessionEntry,
+} from './lib/session-history.js';
+import { createLayoutController } from './lib/layout-controller.js';
+import {
+  buildAttentionIssues,
+  buildServiceBrowserUrl,
+  clamp,
+  escapeHtml,
+  formatUpdatedAgo,
+  inferBrowserScheme,
+  normalizeUrlHost,
+  renderMetricsServiceRows,
+  renderSensitiveValue as renderSensitiveValueHelper,
+  seedFromServer,
+  seededInt,
+  seededSeries,
+  seriesAvg,
+  shortErrorText,
+  sparklineSvg,
+} from './lib/metrics-helpers.js';
 
 /* ══════════════════════════════════════════════════════════
    SERVER STATE  (loaded from Rust backend)
@@ -128,55 +103,41 @@ const TERMINAL_INPUT_FLUSH_MS = 2;
 const TERMINAL_OUTPUT_FLUSH_MS = 4;
 const WSL_FALLBACK_DELAY_MS = 60000;
 const WSL_MISSING_PROMPT_MARKER = 'the windows subsystem for linux is not installed';
-let recentLocalSessions = loadRecentSessions();
-let SESSION_SHORTCUTS = loadSessionShortcuts();
+let recentLocalSessions = [];
+let SESSION_SHORTCUTS = [];
 let sidebarSuppressClickUntilMs = 0;
 let sidebarPointerDragState = null;
 let collapsedFolderIds = loadCollapsedFolders();
-const SERVER_ICON_OPTIONS = Object.freeze([
-  { value: 'server', label: 'Server', glyph: '🖥' },
-  { value: 'cloud', label: 'Cloud', glyph: '☁' },
-  { value: 'database', label: 'Database', glyph: '🗄' },
-  { value: 'shield', label: 'Shield', glyph: '🛡' },
-  { value: 'terminal', label: 'Terminal', glyph: '⌨' },
-  { value: 'network', label: 'Network', glyph: '🕸' },
+let layoutController = null;
+const SESSION_SHORTCUT_FOLDER_DEFS = Object.freeze([
+  { id: 'session-folder-local_shell', type: 'local_shell', name: 'Local Shell' },
+  { id: 'session-folder-wsl_shell', type: 'wsl_shell', name: 'WSL' },
+  { id: 'session-folder-vnc', type: 'vnc', name: 'VNC' },
+  { id: 'session-folder-rdp', type: 'rdp', name: 'RDP' },
+  { id: 'session-folder-mosh', type: 'mosh', name: 'MOSH' },
+  { id: 'session-folder-rsh', type: 'rsh', name: 'RSH' },
+  { id: 'session-folder-ftp', type: 'ftp', name: 'FTP' },
+  { id: 'session-folder-serial', type: 'serial', name: 'Serial' },
 ]);
-const SERVER_ICON_VALUE_SET = new Set(SERVER_ICON_OPTIONS.map((option) => option.value));
-const SERVER_ICON_OPTIONS_HTML = SERVER_ICON_OPTIONS
-  .map((option) => `<option value="${option.value}">${option.glyph} ${option.label}</option>`)
-  .join('');
+const SESSION_SHORTCUT_FOLDER_ID_SET = new Set(SESSION_SHORTCUT_FOLDER_DEFS.map((folder) => folder.id));
 
-function normalizeConnectionProtocol(value) {
-  const protocol = String(value || 'ssh').toLowerCase();
-  return protocol === 'telnet' ? 'telnet' : 'ssh';
+function defaultSessionShortcutFolderId(type) {
+  const normalizedType = normalizeSessionShortcutType(type);
+  const match = SESSION_SHORTCUT_FOLDER_DEFS.find((folder) => folder.type === normalizedType);
+  return match ? match.id : SESSION_SHORTCUT_FOLDER_DEFS[0].id;
 }
 
-function serverProtocol(server) {
-  return normalizeConnectionProtocol(server?._raw?.protocol ?? server?.protocol);
+function normalizeSessionShortcutFolderId(folderId, type) {
+  const id = String(folderId || '').trim();
+  if (SESSION_SHORTCUT_FOLDER_ID_SET.has(id)) return id;
+  return defaultSessionShortcutFolderId(type);
 }
 
-function normalizeFolderName(value) {
-  const name = String(value || '').trim();
-  return name.replace(/\s+/g, ' ').slice(0, 64);
+function sessionShortcutFolderName(folderId) {
+  const normalizedId = normalizeSessionShortcutFolderId(folderId);
+  const folder = SESSION_SHORTCUT_FOLDER_DEFS.find((item) => item.id === normalizedId);
+  return folder ? folder.name : 'Sessions';
 }
-
-function isSessionFolderId(value) {
-  return String(value || '').trim() === SESSION_FOLDER_ID;
-}
-
-function withSystemFolders(folders) {
-  const normalized = Array.isArray(folders)
-    ? folders
-      .map((folder) => ({
-        id: String(folder?.id || '').trim(),
-        name: normalizeFolderName(folder?.name || ''),
-      }))
-      .filter((folder) => folder.id && folder.name && !isSessionFolderId(folder.id))
-    : [];
-
-  return [{ id: SESSION_FOLDER_ID, name: SESSION_FOLDER_NAME, system: true }, ...normalized];
-}
-
 function normalizeFolderId(value) {
   const id = String(value || '').trim();
   if (!id) return null;
@@ -189,16 +150,6 @@ function folderNameById(folderId) {
   if (!id) return '';
   const folder = FOLDERS.find((item) => item.id === id);
   return folder ? folder.name : '';
-}
-
-function folderIconSvg(kind = 'folder') {
-  if (kind === 'ungrouped') {
-    return '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.5"></circle><path d="M12 2.5v4"></path><path d="M12 17.5v4"></path><path d="M2.5 12h4"></path><path d="M17.5 12h4"></path></svg>';
-  }
-  if (kind === 'sessions') {
-    return '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5.5" width="17" height="13" rx="2"></rect><path d="M7.5 9.5h9"></path><path d="M7.5 13h6"></path></svg>';
-  }
-  return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 7.5h6l1.6 2h9.4v8.8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2V7.5Z"></path><path d="M3.5 7.5V5.8a2 2 0 0 1 2-2h4.3l1.4 1.7h7.3a2 2 0 0 1 2 2v2"></path></svg>';
 }
 
 function loadCollapsedFolders() {
@@ -238,161 +189,6 @@ function toggleFolderCollapsed(folderId) {
   refreshSidebarBadges();
 }
 
-const INPUT_MODAL = {
-  resolver: null,
-};
-
-function createInputModal() {
-  if (document.getElementById('input-modal')) return;
-  const modal = document.createElement('div');
-  modal.id = 'input-modal';
-  modal.style.display = 'none';
-  modal.innerHTML = `
-    <div class="input-modal-overlay" id="input-modal-overlay"></div>
-    <div class="input-modal-panel" role="dialog" aria-modal="true" aria-labelledby="input-modal-title">
-      <div class="input-modal-title" id="input-modal-title">Input</div>
-      <label class="input-modal-label" id="input-modal-label" for="input-modal-value">Value</label>
-      <input class="input-modal-input" id="input-modal-value" spellcheck="false" autocomplete="off">
-      <div class="input-modal-error" id="input-modal-error" style="display:none"></div>
-      <div class="input-modal-actions">
-        <button class="input-modal-btn ghost" id="input-modal-cancel">Cancel</button>
-        <button class="input-modal-btn" id="input-modal-save">Save</button>
-      </div>
-    </div>`;
-  document.body.appendChild(modal);
-
-  const cancel = () => {
-    const resolver = INPUT_MODAL.resolver;
-    INPUT_MODAL.resolver = null;
-    modal.style.display = 'none';
-    if (resolver) resolver(null);
-  };
-
-  document.getElementById('input-modal-overlay').addEventListener('click', cancel);
-  document.getElementById('input-modal-cancel').addEventListener('click', cancel);
-
-  document.getElementById('input-modal-save').addEventListener('click', () => {
-    const resolver = INPUT_MODAL.resolver;
-    INPUT_MODAL.resolver = null;
-    const value = String(document.getElementById('input-modal-value').value || '');
-    modal.style.display = 'none';
-    if (resolver) resolver(value);
-  });
-
-  document.getElementById('input-modal-value').addEventListener('keydown', (ev) => {
-    if (ev.key === 'Enter') {
-      ev.preventDefault();
-      document.getElementById('input-modal-save').click();
-    } else if (ev.key === 'Escape') {
-      ev.preventDefault();
-      cancel();
-    }
-  });
-}
-
-async function askInputModal({
-  title = 'Input',
-  label = 'Value',
-  value = '',
-  placeholder = '',
-  submitText = 'Save',
-} = {}) {
-  createInputModal();
-  const modal = document.getElementById('input-modal');
-  const titleEl = document.getElementById('input-modal-title');
-  const labelEl = document.getElementById('input-modal-label');
-  const inputEl = document.getElementById('input-modal-value');
-  const saveEl = document.getElementById('input-modal-save');
-  const errorEl = document.getElementById('input-modal-error');
-  if (!modal || !titleEl || !labelEl || !inputEl || !saveEl || !errorEl) return null;
-
-  if (INPUT_MODAL.resolver) return null;
-
-  titleEl.textContent = title;
-  labelEl.textContent = label;
-  inputEl.value = String(value || '');
-  inputEl.placeholder = String(placeholder || '');
-  saveEl.textContent = submitText;
-  errorEl.style.display = 'none';
-  errorEl.textContent = '';
-  modal.style.display = 'block';
-
-  setTimeout(() => {
-    inputEl.focus();
-    inputEl.select();
-  }, 0);
-
-  return await new Promise((resolve) => {
-    INPUT_MODAL.resolver = resolve;
-  });
-}
-
-function sDot(s) {
-  return s === 'online' ? '#00ffaa' : s === 'warn' ? '#f5a623' : s === 'unknown' ? '#3a5570' : '#ff3b5c';
-}
-
-function latencyColor(latencyMs, status) {
-  if (typeof latencyMs !== 'number' || !Number.isFinite(latencyMs)) {
-    return status === 'offline' ? 'var(--danger)' : 'var(--muted)';
-  }
-  if (latencyMs < 20) return '#f7fbff';
-  if (latencyMs < 90) return '#00ffaa';
-  if (latencyMs < 120) return '#c8ff4d';
-  if (latencyMs < 150) return '#ffd84d';
-  if (latencyMs < 200) return '#ff9f1a';
-  return '#ff3b5c';
-}
-
-function normalizeCoordinate(value) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function getServerMapCoords(server) {
-  const lat = Number(server?.lat);
-  const lng = Number(server?.lng);
-  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-  return { lat, lng };
-}
-
-function hasValidMapCoords(server) {
-  return Boolean(getServerMapCoords(server));
-}
-
-function safeMapFlyTo(mapInstance, coords, minZoom = 3) {
-  if (!mapInstance || !coords) return;
-
-  const rawZoom = Number(mapInstance.getZoom?.());
-  const targetZoom = Number.isFinite(rawZoom) ? Math.max(rawZoom, minZoom) : minZoom;
-  const fly = () => {
-    try {
-      mapInstance.flyTo([coords.lat, coords.lng], targetZoom, { duration: 0.8 });
-    } catch (error) {
-      console.warn('Map flyTo skipped due to invalid map state:', error);
-    }
-  };
-
-  mapInstance.invalidateSize();
-  const size = mapInstance.getSize?.();
-  const hasSize = size && Number.isFinite(size.x) && Number.isFinite(size.y) && size.x > 0 && size.y > 0;
-
-  if (!hasSize) {
-    setTimeout(() => {
-      mapInstance.invalidateSize();
-      const retrySize = mapInstance.getSize?.();
-      const retryHasSize = retrySize
-        && Number.isFinite(retrySize.x)
-        && Number.isFinite(retrySize.y)
-        && retrySize.x > 0
-        && retrySize.y > 0;
-      if (retryHasSize) fly();
-    }, 160);
-    return;
-  }
-
-  fly();
-}
-
 function updateAvgPingRefreshButton() {
   const btn = document.getElementById('h-avgping-refresh-btn');
   if (!btn) return;
@@ -400,38 +196,6 @@ function updateAvgPingRefreshButton() {
   btn.classList.toggle('is-loading', statusRefreshInFlight);
   btn.title = statusRefreshInFlight ? 'Refreshing server ping...' : 'Refresh server ping';
   btn.setAttribute('aria-busy', statusRefreshInFlight ? 'true' : 'false');
-}
-
-function normalizeServerIcon(icon) {
-  const value = String(icon || '').toLowerCase();
-  if (SERVER_ICON_VALUE_SET.has(value)) return value;
-  return 'server';
-}
-
-function serverIconLabel(icon) {
-  const key = normalizeServerIcon(icon);
-  const found = SERVER_ICON_OPTIONS.find((option) => option.value === key);
-  return found ? found.label : 'Server';
-}
-
-function serverIconSvg(icon) {
-  const key = normalizeServerIcon(icon);
-  if (key === 'cloud') {
-    return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.5 18h9.5a3 3 0 0 0 .4-6 4.8 4.8 0 0 0-9.3-1.4A3.7 3.7 0 0 0 7.5 18Z"></path></svg>';
-  }
-  if (key === 'database') {
-    return '<svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="6.5" rx="6.5" ry="2.8"></ellipse><path d="M5.5 6.5v10c0 1.5 2.9 2.8 6.5 2.8s6.5-1.3 6.5-2.8v-10"></path><path d="M5.5 11.5c0 1.5 2.9 2.8 6.5 2.8s6.5-1.3 6.5-2.8"></path></svg>';
-  }
-  if (key === 'shield') {
-    return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 7 3.2V11c0 5-2.8 8.1-7 10-4.2-1.9-7-5-7-10V6.2L12 3Z"></path><path d="m9.5 11.8 1.8 1.8 3.4-3.6"></path></svg>';
-  }
-  if (key === 'terminal') {
-    return '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2"></rect><path d="m7.5 9.5 2.7 2.3-2.7 2.3"></path><path d="M12.5 15h4"></path></svg>';
-  }
-  if (key === 'network') {
-    return '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="6.2" r="2.2"></circle><circle cx="6.2" cy="17.8" r="2.2"></circle><circle cx="17.8" cy="17.8" r="2.2"></circle><path d="M10.9 8.2 7.4 15.6"></path><path d="m13.1 8.2 3.5 7.4"></path><path d="M8.4 17.8h7.2"></path></svg>';
-  }
-  return '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"></rect><path d="M8 8h8"></path><path d="M8 12h8"></path><path d="M8 16h8"></path></svg>';
 }
 
 function updateHeaderStats() {
@@ -462,264 +226,137 @@ function formatMemoryMb(value) {
 }
 
 function loadSessionShortcuts() {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(SESSION_SHORTCUT_STORAGE_KEY) || '[]');
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .map(normalizeSessionShortcutEntry)
-      .filter(Boolean)
-      .slice(0, SESSION_SHORTCUT_LIMIT);
-  } catch {
-    return [];
-  }
+  return loadSessionShortcutsFromStorage((entry) => {
+    const shortcut = normalizeSessionShortcutEntry(entry);
+    if (!shortcut) return null;
+    return {
+      ...shortcut,
+      folderId: normalizeSessionShortcutFolderId(shortcut.folderId, shortcut.type),
+    };
+  });
 }
 
 function saveSessionShortcuts() {
-  try {
-    localStorage.setItem(
-      SESSION_SHORTCUT_STORAGE_KEY,
-      JSON.stringify(SESSION_SHORTCUTS.slice(0, SESSION_SHORTCUT_LIMIT))
-    );
-  } catch {
-    // Ignore localStorage write failures.
-  }
-}
-
-function normalizeSessionShortcutType(value) {
-  const type = String(value || '').toLowerCase();
-  const allowed = new Set([
-    'local_shell',
-    'wsl_shell',
-    'rsh',
-    'mosh',
-    'rdp',
-    'vnc',
-    'ftp',
-    'serial',
-  ]);
-  return allowed.has(type) ? type : null;
-}
-
-function normalizeSessionShortcutEntry(entry) {
-  if (!entry || typeof entry !== 'object') return null;
-  const type = normalizeSessionShortcutType(entry.type);
-  if (!type) return null;
-  const id = String(entry.id || '').trim() || crypto.randomUUID();
-  return {
-    id,
-    type,
-    name: String(entry.name || '').trim(),
-    payload: entry.payload && typeof entry.payload === 'object' ? entry.payload : {},
-    createdAt: Number(entry.createdAt) || Date.now(),
-  };
-}
-
-function sessionShortcutDisplayName(shortcut) {
-  if (!shortcut) return 'Session';
-  if (shortcut.name) return shortcut.name;
-  const payload = shortcut.payload || {};
-
-  if (shortcut.type === 'local_shell') return `Local ${localShellLabel(payload.shellType || 'powershell')}`;
-  if (shortcut.type === 'wsl_shell') return 'Local WSL';
-  if (shortcut.type === 'serial') return `Serial ${payload.serialPort || ''}`.trim();
-
-  const host = String(payload.host || '').trim();
-  const port = Number(payload.port);
-  if (host && Number.isFinite(port) && port > 0) return `${shortcut.type.toUpperCase()} ${host}:${port}`;
-  if (host) return `${shortcut.type.toUpperCase()} ${host}`;
-  return shortcut.type.toUpperCase();
-}
-
-function sessionShortcutMeta(shortcut) {
-  const payload = shortcut?.payload || {};
-  if (shortcut?.type === 'local_shell') return 'LOCAL';
-  if (shortcut?.type === 'wsl_shell') return 'WSL';
-  if (shortcut?.type === 'serial') return `${payload.serialPort || 'SERIAL'} @ ${payload.baud || 115200}`;
-  const host = String(payload.host || '').trim();
-  const port = Number(payload.port);
-  if (host && Number.isFinite(port) && port > 0) return `${host}:${port}`;
-  return shortcut?.type ? shortcut.type.toUpperCase() : 'SESSION';
+  saveSessionShortcutsToStorage(SESSION_SHORTCUTS);
 }
 
 function addSessionShortcut(entry) {
-  const normalized = normalizeSessionShortcutEntry({
+  const type = normalizeSessionShortcutType(entry?.type);
+  SESSION_SHORTCUTS = addSessionShortcutEntry(SESSION_SHORTCUTS, {
     ...entry,
-    id: crypto.randomUUID(),
-    createdAt: Date.now(),
+    type,
+    folderId: normalizeSessionShortcutFolderId(entry?.folderId, type),
   });
-  if (!normalized) return;
-  SESSION_SHORTCUTS = [normalized, ...SESSION_SHORTCUTS].slice(0, SESSION_SHORTCUT_LIMIT);
   saveSessionShortcuts();
   renderSidebar();
   refreshSidebarBadges();
 }
 
 function removeSessionShortcut(shortcutId) {
-  const id = String(shortcutId || '').trim();
-  if (!id) return;
-  SESSION_SHORTCUTS = SESSION_SHORTCUTS.filter((item) => item.id !== id);
+  SESSION_SHORTCUTS = removeSessionShortcutEntry(SESSION_SHORTCUTS, shortcutId);
   saveSessionShortcuts();
   renderSidebar();
   refreshSidebarBadges();
 }
 
-function loadRecentSessions() {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(RECENT_SESSION_STORAGE_KEY) || '[]');
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter((item) => item && typeof item === 'object')
-      .map(normalizeRecentSessionEntry)
-      .filter(Boolean)
-      .slice(0, RECENT_SESSION_LIMIT);
-  } catch {
-    return [];
+function findSessionShortcutById(shortcutId) {
+  const id = String(shortcutId || '').trim();
+  if (!id) return null;
+  return SESSION_SHORTCUTS.find((item) => item.id === id) || null;
+}
+
+function defaultSessionShortcutName(type, payload = {}) {
+  if (type === 'local_shell') return `Local ${localShellLabel(payload.shellType || 'powershell')}`;
+  if (type === 'wsl_shell') return 'Local WSL';
+  if (type === 'serial') return `Serial ${payload.serialPort || ''}`.trim() || 'Serial';
+
+  const host = String(payload.host || '').trim();
+  const port = Number(payload.port);
+  if (type === 'vnc') {
+    const resolvedPort = Number.isFinite(port) && port > 0 ? port : 5900;
+    return `VNC ${host}:${resolvedPort}`;
   }
+  if (host && Number.isFinite(port) && port > 0) return `${String(type || '').toUpperCase()} ${host}:${port}`;
+  if (host) return `${String(type || '').toUpperCase()} ${host}`;
+  return sessionShortcutDisplayName({ type, payload, name: '' }, localShellLabel);
+}
+
+function updateSessionShortcut(shortcutId, updater) {
+  const existing = findSessionShortcutById(shortcutId);
+  if (!existing) return null;
+  const next = updater(existing);
+  if (!next) return null;
+  const normalizedNext = normalizeSessionShortcutEntry(next);
+  if (!normalizedNext) return null;
+  const hydratedNext = {
+    ...normalizedNext,
+    folderId: normalizeSessionShortcutFolderId(normalizedNext.folderId, normalizedNext.type),
+  };
+  SESSION_SHORTCUTS = SESSION_SHORTCUTS.map((item) => (item.id === existing.id ? hydratedNext : item));
+  saveSessionShortcuts();
+  renderSidebar();
+  refreshSidebarBadges();
+  return hydratedNext;
+}
+
+function findVncTabIdByShortcutId(shortcutId) {
+  const id = String(shortcutId || '').trim();
+  if (!id) return null;
+  const match = Object.entries(termTabs).find(([, tab]) => tab.mode === 'vnc' && tab.shortcutId === id);
+  return match ? match[0] : null;
+}
+
+function sessionShortcutConnectionState(shortcut) {
+  if (!shortcut || shortcut.type !== 'vnc') return 'saved';
+  const tab = Object.values(termTabs).find((item) => item.mode === 'vnc' && item.shortcutId === shortcut.id);
+  if (!tab) return 'saved';
+  return String(tab.connStatus || 'disconnected');
+}
+
+function sessionShortcutIndicatorColor(shortcut) {
+  const state = sessionShortcutConnectionState(shortcut);
+  if (state === 'connected') return '#00ffaa';
+  if (state === 'error') return '#ff3b5c';
+  if (state === 'connecting') return '#f5a623';
+  return '#3a5570';
+}
+
+function sessionShortcutStatusLabel(shortcut) {
+  const state = sessionShortcutConnectionState(shortcut);
+  if (state === 'connected') return 'CONNECTED';
+  if (state === 'connecting') return 'CONNECTING';
+  if (state === 'error') return 'ERROR';
+  if (state === 'disconnected') return 'DISCONNECTED';
+  return 'SAVED';
+}
+
+function loadRecentSessions() {
+  return loadRecentSessionsFromStorage((entry) => normalizeRecentSessionEntryFromStorage(entry, normalizeLocalShellType));
 }
 
 function saveRecentSessions() {
-  try {
-    localStorage.setItem(RECENT_SESSION_STORAGE_KEY, JSON.stringify(recentLocalSessions.slice(0, RECENT_SESSION_LIMIT)));
-  } catch {
-    // Ignore localStorage write failures.
-  }
-}
-
-function formatRecentSessionTimestamp(ms) {
-  const value = Number(ms);
-  if (!Number.isFinite(value) || value <= 0) return '\u2014';
-  try {
-    return new Date(value).toLocaleString();
-  } catch {
-    return '\u2014';
-  }
-}
-
-function normalizeRecentSessionEntry(entry) {
-  if (!entry || typeof entry !== 'object') return null;
-  const id = String(entry.id || '').trim();
-  if (!id) return null;
-
-  const mode = String(entry.mode || 'local').toLowerCase() === 'ssh' ? 'ssh' : 'local';
-  const openedAtMs = Number(entry.openedAtMs) || Date.now();
-  if (mode === 'ssh') {
-    return {
-      id,
-      mode: 'ssh',
-      openedAtMs,
-      serverId: String(entry.serverId || '').trim(),
-      serverName: String(entry.serverName || '').trim(),
-      host: String(entry.host || '').trim(),
-      port: Number(entry.port) || 22,
-      username: String(entry.username || '').trim(),
-    };
-  }
-
-  return {
-    id,
-    mode: 'local',
-    openedAtMs,
-    shell: normalizeLocalShellType(entry.shell || 'powershell'),
-    workspace: String(entry.workspace || ''),
-  };
-}
-
-function recentSessionLabel(entry) {
-  if (entry?.mode === 'ssh') {
-    const target = entry.serverName || entry.host || 'Unknown server';
-    return `SSH · ${target}`;
-  }
-  return localShellLabel(entry?.shell || 'powershell');
-}
-
-function recentSessionMeta(entry) {
-  if (entry?.mode === 'ssh') {
-    const host = String(entry.host || '').trim();
-    const port = Number(entry.port);
-    const endpoint = host ? `${host}:${Number.isFinite(port) ? port : 22}` : '\u2014';
-    const user = String(entry.username || '').trim();
-    return user ? `${endpoint} · ${user}` : endpoint;
-  }
-  return entry?.workspace ? String(entry.workspace) : '\u2014';
+  saveRecentSessionsToStorage(recentLocalSessions);
 }
 
 function renderRecentSessionHistory() {
-  const listEl = document.getElementById('dash-recent-session-list');
-  if (!listEl) return;
-
-  if (!recentLocalSessions.length) {
-    listEl.innerHTML = '<div class="dash-recent-empty">No recent sessions.</div>';
-    syncRecentSessionViewport();
-    return;
-  }
-
-  listEl.innerHTML = recentLocalSessions.map((entry) => {
-    const sessionLabel = recentSessionLabel(entry);
-    const openedAt = formatRecentSessionTimestamp(entry.openedAtMs);
-    const detail = escapeHtml(String(recentSessionMeta(entry)));
-    const sessionId = escapeHtml(String(entry.id || ''));
-    return `
-      <div
-        class="dash-recent-item dash-recent-item-action"
-        data-session-id="${sessionId}"
-        role="button"
-        tabindex="0"
-        title="Restore this session"
-      >
-        <div class="dash-recent-main">
-          <div class="dash-recent-shell">${escapeHtml(sessionLabel)}</div>
-          <div class="dash-recent-time">${escapeHtml(openedAt)}</div>
-        </div>
-        <div class="dash-recent-path">${detail}</div>
-      </div>`;
-  }).join('');
-
-  listEl.querySelectorAll('.dash-recent-item-action').forEach((item) => {
-    item.addEventListener('click', () => {
-      const sessionId = item.dataset.sessionId || '';
-      void restoreRecentSession(sessionId);
-    });
-    item.addEventListener('keydown', (ev) => {
-      if (ev.key !== 'Enter' && ev.key !== ' ') return;
-      ev.preventDefault();
-      const sessionId = item.dataset.sessionId || '';
-      void restoreRecentSession(sessionId);
-    });
+  renderRecentSessionHistoryView({
+    recentSessions: recentLocalSessions,
+    escapeHtml,
+    localShellLabel,
+    restoreRecentSession,
   });
-
-  syncRecentSessionViewport();
 }
 
 function syncRecentSessionViewport() {
-  const listEl = document.getElementById('dash-recent-session-list');
-  if (!listEl) return;
-
-  const items = Array.from(listEl.querySelectorAll('.dash-recent-item'));
-  if (items.length <= 4) {
-    listEl.style.maxHeight = '';
-    listEl.style.overflowY = '';
-    return;
-  }
-
-  const styles = window.getComputedStyle(listEl);
-  const gap = parseFloat(styles.rowGap || styles.gap || '0') || 0;
-  const visibleItems = items.slice(0, 4);
-  const visibleHeight = visibleItems.reduce((sum, item) => {
-    return sum + item.getBoundingClientRect().height;
-  }, 0);
-  const totalHeight = visibleHeight + (gap * Math.max(visibleItems.length - 1, 0));
-
-  listEl.style.maxHeight = `${Math.ceil(totalHeight)}px`;
-  listEl.style.overflowY = 'auto';
+  syncRecentSessionViewportView();
 }
 
 function trackRecentSession(sessionEntry) {
-  const normalized = normalizeRecentSessionEntry(sessionEntry);
-  if (!normalized || !normalized.id) return;
-  recentLocalSessions = [
-    normalized,
-    ...recentLocalSessions.filter((entry) => entry.id !== normalized.id),
-  ].slice(0, RECENT_SESSION_LIMIT);
+  recentLocalSessions = trackRecentSessionEntry(
+    recentLocalSessions,
+    sessionEntry,
+    (entry) => normalizeRecentSessionEntryFromStorage(entry, normalizeLocalShellType)
+  );
   saveRecentSessions();
   renderRecentSessionHistory();
 }
@@ -733,24 +370,20 @@ function trackRecentSshSession(sessionEntry) {
 }
 
 function removeMostRecentSession() {
-  if (!recentLocalSessions.length) return null;
-  const [removed, ...rest] = recentLocalSessions;
-  recentLocalSessions = rest;
+  const result = removeMostRecentSessionEntry(recentLocalSessions);
+  recentLocalSessions = result.recentSessions;
+  if (!result.removed) return null;
   saveRecentSessions();
   renderRecentSessionHistory();
-  return removed;
+  return result.removed;
 }
 
 function findLocalTabIdByHistoryId(historyId) {
-  if (!historyId) return null;
-  const match = Object.entries(termTabs).find(([, tab]) => tab.mode === 'local' && tab.historyId === historyId);
-  return match ? match[0] : null;
+  return findLocalTabIdByHistoryIdInTabs(termTabs, historyId);
 }
 
 function findSshTabIdByHistoryId(historyId) {
-  if (!historyId) return null;
-  const match = Object.entries(termTabs).find(([, tab]) => tab.mode === 'ssh' && tab.historyId === historyId);
-  return match ? match[0] : null;
+  return findSshTabIdByHistoryIdInTabs(termTabs, historyId);
 }
 
 async function refreshHostDeviceInfo() {
@@ -856,7 +489,7 @@ function updateMainTerminalLayout() {
     return;
   }
 
-  if (isMaximized) {
+  if (layoutController?.isMaximized()) {
     bottomSection.classList.remove('terminal-collapsed');
     bottomSection.style.flex = '1 1 auto';
     bottomSection.style.height = 'auto';
@@ -927,6 +560,9 @@ function localShellLabel(shellType) {
   if (kind === 'wsl') return 'WSL';
   return 'PowerShell';
 }
+
+recentLocalSessions = loadRecentSessions();
+SESSION_SHORTCUTS = loadSessionShortcuts();
 
 async function startLocalTerminalFromDashboard(terminalType) {
   const terminalKind = normalizeLocalShellType(terminalType);
@@ -1125,10 +761,14 @@ function clearSidebarDragState() {
   document.body.style.cursor = '';
 }
 
-function beginSidebarPointerDrag(ev, serverId, nodeEl) {
+function beginSidebarPointerDrag(ev, item, nodeEl) {
   if (ev.button !== 0) return;
+  const itemType = item && typeof item === 'object' ? String(item.type || 'server') : 'server';
+  const itemId = item && typeof item === 'object' ? String(item.id || '').trim() : String(item || '').trim();
+  if (!itemId) return;
   sidebarPointerDragState = {
-    serverId,
+    itemType,
+    itemId,
     nodeEl,
     startX: ev.clientX,
     startY: ev.clientY,
@@ -1168,29 +808,57 @@ function onSidebarPointerDragMove(ev) {
   });
 
   if (targetNode) {
-    const targetId = targetNode.dataset.serverId || '';
-    if (!targetId || targetId === state.serverId) {
+    const targetId = state.itemType === 'session'
+      ? String(targetNode.dataset.shortcutId || '').trim()
+      : String(targetNode.dataset.serverId || '').trim();
+    if (!targetId || targetId === state.itemId) {
       state.targetType = null;
       state.targetId = null;
       state.targetFolderId = null;
       return;
     }
 
-    const targetServer = SRV.find((server) => server.id === targetId);
+    if (state.itemType === 'server' && !targetNode.dataset.serverId) {
+      state.targetType = null;
+      state.targetId = null;
+      state.targetFolderId = null;
+      return;
+    }
+    if (state.itemType === 'session' && !targetNode.dataset.shortcutId) {
+      state.targetType = null;
+      state.targetId = null;
+      state.targetFolderId = null;
+      return;
+    }
+
+    const targetFolderId = state.itemType === 'session'
+      ? normalizeSessionShortcutFolderId(targetNode.dataset.sessionFolderId || '', findSessionShortcutById(targetId)?.type)
+      : SRV.find((server) => server.id === targetId)?.folderId || null;
     const rect = targetNode.getBoundingClientRect();
     const insertBefore = (ev.clientY - rect.top) < (rect.height / 2);
     targetNode.classList.toggle('drag-over-before', insertBefore);
     targetNode.classList.toggle('drag-over-after', !insertBefore);
-    state.targetType = 'server';
+    state.targetType = state.itemType;
     state.targetId = targetId;
-    state.targetFolderId = targetServer?.folderId || null;
+    state.targetFolderId = targetFolderId;
     state.insertBefore = insertBefore;
     return;
   }
 
   if (targetFolder) {
-    const folderRaw = String(targetFolder.dataset.dropFolderId || '').trim();
-    const folderId = normalizeFolderId(folderRaw);
+    const dropKind = String(targetFolder.dataset.dropKind || 'server');
+    if (dropKind !== state.itemType) {
+      state.targetType = null;
+      state.targetId = null;
+      state.targetFolderId = null;
+      return;
+    }
+    const folderId = state.itemType === 'session'
+      ? normalizeSessionShortcutFolderId(
+        String(targetFolder.dataset.dropSessionFolderId || '').trim(),
+        findSessionShortcutById(state.itemId)?.type
+      )
+      : normalizeFolderId(String(targetFolder.dataset.dropFolderId || '').trim());
     targetFolder.classList.add('drag-over-folder');
     state.targetType = 'folder';
     state.targetId = '';
@@ -1216,6 +884,16 @@ function updateServerFolderLocal(serverId, folderId) {
   if (server._raw && typeof server._raw === 'object') {
     server._raw.folder_id = nextFolderId;
   }
+  return true;
+}
+
+function updateSessionShortcutFolderLocal(shortcutId, folderId) {
+  const shortcut = findSessionShortcutById(shortcutId);
+  if (!shortcut) return false;
+  const nextFolderId = normalizeSessionShortcutFolderId(folderId, shortcut.type);
+  const prevFolderId = normalizeSessionShortcutFolderId(shortcut.folderId, shortcut.type);
+  if (prevFolderId === nextFolderId) return false;
+  shortcut.folderId = nextFolderId;
   return true;
 }
 
@@ -1245,25 +923,66 @@ async function applyAndPersistSidebarMutation({ reorderChanged = false, folderCh
   renderServerList();
 }
 
+function applyAndPersistSessionSidebarMutation() {
+  saveSessionShortcuts();
+  renderSidebar();
+  refreshSidebarBadges();
+}
+
 function onSidebarPointerDragEnd(ev) {
   const state = sidebarPointerDragState;
   window.removeEventListener('mousemove', onSidebarPointerDragMove);
   window.removeEventListener('mouseup', onSidebarPointerDragEnd);
   if (!state) return;
 
+  if (state.itemType === 'session') {
+    let changed = false;
+    let reorderChanged = false;
+    let folderChanged = false;
+    if (state.active) {
+      sidebarSuppressClickUntilMs = Date.now() + 250;
+      if (state.targetType === 'session' && state.targetId) {
+        reorderChanged = moveSessionShortcutOrder(state.itemId, state.targetId, state.insertBefore);
+        folderChanged = updateSessionShortcutFolderLocal(state.itemId, state.targetFolderId);
+        changed = reorderChanged || folderChanged;
+      } else if (state.targetType === 'folder') {
+        folderChanged = updateSessionShortcutFolderLocal(state.itemId, state.targetFolderId);
+        reorderChanged = moveSessionShortcutOrderToEnd(state.itemId);
+        changed = reorderChanged || folderChanged;
+      } else {
+        const list = document.getElementById('sb-list');
+        if (list) {
+          const rect = list.getBoundingClientRect();
+          const inList = ev.clientX >= rect.left
+            && ev.clientX <= rect.right
+            && ev.clientY >= rect.top
+            && ev.clientY <= rect.bottom;
+          if (inList) {
+            reorderChanged = moveSessionShortcutOrderToEnd(state.itemId);
+            changed = reorderChanged;
+          }
+        }
+      }
+    }
+
+    clearSidebarDragState();
+    if (changed) applyAndPersistSessionSidebarMutation();
+    return;
+  }
+
   let changed = false;
   let reorderChanged = false;
   let folderChanged = false;
-  let movedServerId = state.serverId;
+  let movedServerId = state.itemId;
   if (state.active) {
     sidebarSuppressClickUntilMs = Date.now() + 250;
     if (state.targetType === 'server' && state.targetId) {
-      reorderChanged = moveServerOrder(state.serverId, state.targetId, state.insertBefore);
-      folderChanged = updateServerFolderLocal(state.serverId, state.targetFolderId);
+      reorderChanged = moveServerOrder(state.itemId, state.targetId, state.insertBefore);
+      folderChanged = updateServerFolderLocal(state.itemId, state.targetFolderId);
       changed = reorderChanged || folderChanged;
     } else if (state.targetType === 'folder') {
-      folderChanged = updateServerFolderLocal(state.serverId, state.targetFolderId);
-      reorderChanged = moveServerOrderToEnd(state.serverId);
+      folderChanged = updateServerFolderLocal(state.itemId, state.targetFolderId);
+      reorderChanged = moveServerOrderToEnd(state.itemId);
       changed = reorderChanged || folderChanged;
     } else {
       const list = document.getElementById('sb-list');
@@ -1274,7 +993,7 @@ function onSidebarPointerDragEnd(ev) {
           && ev.clientY >= rect.top
           && ev.clientY <= rect.bottom;
         if (inList) {
-          reorderChanged = moveServerOrderToEnd(state.serverId);
+          reorderChanged = moveServerOrderToEnd(state.itemId);
           changed = reorderChanged;
         }
       }
@@ -1307,6 +1026,28 @@ function moveServerOrderToEnd(serverId) {
   return true;
 }
 
+function moveSessionShortcutOrder(draggedId, targetId, insertBefore) {
+  const from = SESSION_SHORTCUTS.findIndex((shortcut) => shortcut.id === draggedId);
+  const to = SESSION_SHORTCUTS.findIndex((shortcut) => shortcut.id === targetId);
+  if (from < 0 || to < 0 || from === to) return false;
+
+  const [moved] = SESSION_SHORTCUTS.splice(from, 1);
+  let insertAt = to;
+  if (from < to) insertAt -= 1;
+  if (!insertBefore) insertAt += 1;
+  insertAt = Math.max(0, Math.min(insertAt, SESSION_SHORTCUTS.length));
+  SESSION_SHORTCUTS.splice(insertAt, 0, moved);
+  return true;
+}
+
+function moveSessionShortcutOrderToEnd(shortcutId) {
+  const from = SESSION_SHORTCUTS.findIndex((shortcut) => shortcut.id === shortcutId);
+  if (from < 0 || from === SESSION_SHORTCUTS.length - 1) return false;
+  const [moved] = SESSION_SHORTCUTS.splice(from, 1);
+  SESSION_SHORTCUTS.push(moved);
+  return true;
+}
+
 async function persistServerOrder() {
   try {
     await invoke('reorder_servers', { serverIds: SRV.map((server) => server.id) });
@@ -1325,6 +1066,22 @@ async function launchSessionShortcut(shortcut) {
   }
   if (shortcut.type === 'wsl_shell') {
     addLocalTermTab('wsl');
+    return;
+  }
+
+  if (shortcut.type === 'vnc') {
+    const existingTabId = findVncTabIdByShortcutId(shortcut.id);
+    if (existingTabId) {
+      setActiveTab(existingTabId);
+      return;
+    }
+    addVncTab({
+      host: payload.host || '',
+      port: Number(payload.port) || 5900,
+      password: payload.password || '',
+      label: shortcut.name || `${payload.host}:${payload.port || 5900}`,
+      shortcutId: shortcut.id,
+    });
     return;
   }
 
@@ -1358,7 +1115,7 @@ function renderSidebarServerItem(server, list, rail, options = {}) {
       <span class="snode-tabs" id="stabs-${server.id}" style="display:none"></span>
       <div class="snode-ping" style="color:${pingColor}">${pingText}</div>
     </div>`;
-  el.addEventListener('mousedown', (ev) => beginSidebarPointerDrag(ev, server.id, el));
+  el.addEventListener('mousedown', (ev) => beginSidebarPointerDrag(ev, { type: 'server', id: server.id }, el));
   el.addEventListener('click', (ev) => {
     if (Date.now() < sidebarSuppressClickUntilMs) {
       ev.preventDefault();
@@ -1395,17 +1152,27 @@ function renderSidebarSessionItem(shortcut, list, options = {}) {
   const indented = Boolean(options.indented);
   const label = escapeHtml(sessionShortcutDisplayName(shortcut));
   const meta = escapeHtml(sessionShortcutMeta(shortcut));
+  const indicatorColor = sessionShortcutIndicatorColor(shortcut);
+  const statusLabel = sessionShortcutStatusLabel(shortcut);
+  const detailText = escapeHtml(meta ? `${meta} · ${statusLabel}` : statusLabel);
 
   const el = document.createElement('div');
   el.className = `snode snode-session${indented ? ' snode-in-folder' : ''}`;
   el.id = `ssn-${shortcut.id}`;
   el.dataset.shortcutId = shortcut.id;
+  el.dataset.sessionFolderId = normalizeSessionShortcutFolderId(shortcut.folderId, shortcut.type);
   el.title = `${sessionShortcutDisplayName(shortcut)} · Left click to launch, right click to remove`;
   el.innerHTML = `<div class="snode-dot" style="background:#ffd84d;box-shadow:0 0 6px #ffd84d88"></div>
     <span class="snode-icon" title="Session Shortcut">${serverIconSvg('terminal')}</span>
     <div class="snode-main"><div class="snode-name">${label}</div></div>
     <div class="snode-right"><div class="snode-ping" style="color:#ffd98a">${meta}</div></div>`;
+  el.title = `${sessionShortcutDisplayName(shortcut)} · Left click to connect, right click for actions`;
+  el.innerHTML = `<div class="snode-dot" style="background:${indicatorColor};box-shadow:0 0 6px ${indicatorColor}88"></div>
+    <span class="snode-icon" title="Session Shortcut">${serverIconSvg('terminal')}</span>
+    <div class="snode-main"><div class="snode-name">${label}</div></div>
+    <div class="snode-right"><div class="snode-ping" style="color:#ffd98a">${detailText}</div></div>`;
 
+  el.addEventListener('mousedown', (ev) => beginSidebarPointerDrag(ev, { type: 'session', id: shortcut.id }, el));
   el.addEventListener('click', async (ev) => {
     if (Date.now() < sidebarSuppressClickUntilMs) {
       ev.preventDefault();
@@ -1419,9 +1186,7 @@ function renderSidebarSessionItem(shortcut, list, options = {}) {
   el.addEventListener('contextmenu', (ev) => {
     ev.preventDefault();
     ev.stopPropagation();
-    const ok = window.confirm(`Remove saved session "${sessionShortcutDisplayName(shortcut)}"?`);
-    if (!ok) return;
-    removeSessionShortcut(shortcut.id);
+    showSessionContextMenu(ev.clientX, ev.clientY, shortcut.id);
   });
 
   list.appendChild(el);
@@ -1443,21 +1208,31 @@ function renderSidebar() {
 
   const groupedServers = new Map();
   const sessionShortcuts = SESSION_SHORTCUTS.slice(0, SESSION_SHORTCUT_LIMIT);
+  const groupedSessionShortcuts = new Map();
   FOLDERS.forEach((folder) => groupedServers.set(folder.id, []));
+  SESSION_SHORTCUT_FOLDER_DEFS.forEach((folder) => groupedSessionShortcuts.set(folder.id, []));
   const ungroupedServers = [];
   SRV.forEach((server) => {
     const folderId = normalizeFolderId(server.folderId);
     if (folderId && groupedServers.has(folderId)) groupedServers.get(folderId).push(server);
     else ungroupedServers.push(server);
   });
+  sessionShortcuts.forEach((shortcut) => {
+    const folderId = normalizeSessionShortcutFolderId(shortcut.folderId, shortcut.type);
+    shortcut.folderId = folderId;
+    groupedSessionShortcuts.get(folderId)?.push(shortcut);
+  });
 
   FOLDERS.forEach((folder) => {
     const collapsed = isFolderCollapsed(folder.id);
     const isSystemSessionFolder = isSessionFolderId(folder.id);
     const folderRow = document.createElement('div');
-    folderRow.className = `sb-folder-row sb-folder-drop-target${collapsed ? ' collapsed' : ''}${isSystemSessionFolder ? ' sb-folder-system' : ''}`;
+    folderRow.className = `sb-folder-row${isSystemSessionFolder ? ' sb-folder-system' : ' sb-folder-drop-target'}${collapsed ? ' collapsed' : ''}`;
     folderRow.dataset.folderId = folder.id;
-    folderRow.dataset.dropFolderId = folder.id;
+    if (!isSystemSessionFolder) {
+      folderRow.dataset.dropKind = 'server';
+      folderRow.dataset.dropFolderId = folder.id;
+    }
     folderRow.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
     const folderCount = (groupedServers.get(folder.id) || []).length + (isSystemSessionFolder ? sessionShortcuts.length : 0);
     folderRow.innerHTML = `<span class="sb-folder-caret">${collapsed ? '&#9656;' : '&#9662;'}</span><span class="sb-folder-icon">${folderIconSvg(isSystemSessionFolder ? 'sessions' : 'folder')}</span><span class="sb-folder-name">${escapeHtml(folder.name)}</span><span class="sb-folder-count">${folderCount}</span>`;
@@ -1479,7 +1254,28 @@ function renderSidebar() {
     const members = groupedServers.get(folder.id) || [];
     if (!collapsed) {
       if (isSystemSessionFolder) {
-        sessionShortcuts.forEach((shortcut) => renderSidebarSessionItem(shortcut, list, { indented: true }));
+        SESSION_SHORTCUT_FOLDER_DEFS.forEach((sessionFolder) => {
+          const sessionFolderCollapsed = isFolderCollapsed(sessionFolder.id);
+          const sessionFolderRow = document.createElement('div');
+          sessionFolderRow.className = `sb-folder-row sb-folder-drop-target${sessionFolderCollapsed ? ' collapsed' : ''}`;
+          sessionFolderRow.dataset.dropKind = 'session';
+          sessionFolderRow.dataset.dropSessionFolderId = sessionFolder.id;
+          sessionFolderRow.setAttribute('aria-expanded', sessionFolderCollapsed ? 'false' : 'true');
+          sessionFolderRow.style.paddingLeft = '20px';
+          const sessionFolderItems = groupedSessionShortcuts.get(sessionFolder.id) || [];
+          sessionFolderRow.innerHTML = `<span class="sb-folder-caret">${sessionFolderCollapsed ? '&#9656;' : '&#9662;'}</span><span class="sb-folder-icon">${folderIconSvg('folder')}</span><span class="sb-folder-name">${escapeHtml(sessionFolder.name)}</span><span class="sb-folder-count">${sessionFolderItems.length}</span>`;
+          sessionFolderRow.addEventListener('click', (ev) => {
+            if (Date.now() < sidebarSuppressClickUntilMs) return;
+            ev.preventDefault();
+            ev.stopPropagation();
+            toggleFolderCollapsed(sessionFolder.id);
+          });
+          list.appendChild(sessionFolderRow);
+
+          if (!sessionFolderCollapsed) {
+            sessionFolderItems.forEach((shortcut) => renderSidebarSessionItem(shortcut, list, { indented: true }));
+          }
+        });
       }
       members.forEach((server) => renderSidebarServerItem(server, list, rail, { indented: true }));
     }
@@ -1489,6 +1285,7 @@ function renderSidebar() {
     const ungroupedCollapsed = isFolderCollapsed(UNGROUPED_COLLAPSE_ID);
     const ungroupedRow = document.createElement('div');
     ungroupedRow.className = `sb-folder-row sb-folder-row-ghost sb-folder-drop-target${ungroupedCollapsed ? ' collapsed' : ''}`;
+    ungroupedRow.dataset.dropKind = 'server';
     ungroupedRow.dataset.dropFolderId = '';
     ungroupedRow.setAttribute('aria-expanded', ungroupedCollapsed ? 'false' : 'true');
     ungroupedRow.innerHTML = `<span class="sb-folder-caret">${ungroupedCollapsed ? '&#9656;' : '&#9662;'}</span><span class="sb-folder-icon">${folderIconSvg('ungrouped')}</span><span class="sb-folder-name">Ungrouped</span><span class="sb-folder-count">${ungroupedServers.length}</span>`;
@@ -1519,6 +1316,11 @@ let leafletMarkers = {};
 let dashMap = null;
 let dashLeafletMarkers = {};
 let dashMapHasFit = false;
+layoutController = createLayoutController({
+  map,
+  updateMainTerminalLayout,
+  getSelectedServerId: () => selId,
+});
 
 function createMarkerIcon(s, active) {
   const col = sDot(s.status);
@@ -1902,6 +1704,158 @@ function hideFolderContextMenu() {
   menu.dataset.folderId = '';
 }
 
+function hideSessionContextMenu() {
+  const menu = document.getElementById('session-context-menu');
+  if (!menu) return;
+  menu.style.display = 'none';
+  menu.innerHTML = '';
+  menu.dataset.shortcutId = '';
+}
+
+function showSessionContextMenu(x, y, shortcutId) {
+  const menu = document.getElementById('session-context-menu');
+  const shortcut = findSessionShortcutById(shortcutId);
+  if (!menu || !shortcut) return;
+
+  hideSftpContextMenu();
+  hideServerContextMenu();
+  hideFolderContextMenu();
+
+  menu.dataset.shortcutId = shortcut.id;
+  menu.innerHTML = [
+    '<button class="sftp-menu-item" data-action="connect_shortcut">Connect</button>',
+    '<button class="sftp-menu-item" data-action="edit_shortcut">Edit Config</button>',
+    '<button class="sftp-menu-item" data-action="rename_shortcut">Rename</button>',
+    '<div class="sftp-menu-sep"></div>',
+    '<button class="sftp-menu-item danger" data-action="delete_shortcut">Delete</button>',
+  ].join('');
+  menu.style.display = 'block';
+
+  const rect = menu.getBoundingClientRect();
+  const maxLeft = Math.max(8, window.innerWidth - rect.width - 8);
+  const maxTop = Math.max(8, window.innerHeight - rect.height - 8);
+  menu.style.left = `${Math.min(x, maxLeft)}px`;
+  menu.style.top = `${Math.min(y, maxTop)}px`;
+
+  menu.querySelectorAll('[data-action]').forEach((btn) => {
+    btn.addEventListener('click', async (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      await runSessionContextAction(btn.dataset.action, shortcut.id);
+    });
+  });
+}
+
+async function buildShortcutUpdateFromModal(existingShortcut) {
+  const type = String(document.getElementById('session-type')?.value || existingShortcut?.type || 'local_shell');
+  const localShellType = normalizeLocalShellType(document.getElementById('session-local-shell')?.value || 'powershell');
+  const vncHost = String(document.getElementById('session-vnc-host')?.value || '').trim();
+  const vncPortRaw = String(document.getElementById('session-vnc-port')?.value || '5900').trim();
+  const vncPassword = String(document.getElementById('session-vnc-password')?.value || '');
+  const externalHost = String(document.getElementById('session-external-host')?.value || '').trim();
+  const externalPortRaw = String(document.getElementById('session-external-port')?.value || '').trim();
+  const externalUsername = String(document.getElementById('session-external-username')?.value || '').trim();
+  const externalPassword = String(document.getElementById('session-external-password')?.value || '');
+  const externalSerialPort = String(document.getElementById('session-external-serial-port')?.value || '').trim();
+  const externalBaudRaw = String(document.getElementById('session-external-baud')?.value || '115200').trim();
+
+  let payload = {};
+
+  if (type === 'local_shell') {
+    payload = { shellType: localShellType };
+  } else if (type === 'wsl_shell') {
+    payload = {};
+  } else if (type === 'vnc') {
+    const parsedPort = Number.parseInt(vncPortRaw || '5900', 10);
+    if (!vncHost) return { error: 'VNC host is required.' };
+    if (!Number.isInteger(parsedPort) || parsedPort < 1 || parsedPort > 65535) {
+      return { error: 'Port must be a valid number between 1 and 65535.' };
+    }
+    payload = { host: vncHost, port: parsedPort, password: vncPassword };
+  } else if (type === 'serial') {
+    const baud = Number.parseInt(externalBaudRaw || '115200', 10);
+    if (!externalSerialPort) return { error: 'Serial port is required (e.g. COM3).' };
+    if (!Number.isInteger(baud) || baud < 50 || baud > 921600) {
+      return { error: 'Baud rate must be a valid number between 50 and 921600.' };
+    }
+    payload = { serialPort: externalSerialPort, baud };
+  } else if (isExternalLauncherSession(type)) {
+    const port = Number.parseInt(externalPortRaw || '0', 10);
+    if (!externalHost) return { error: 'Remote host is required.' };
+    if (type !== 'rsh' && (!Number.isInteger(port) || port < 1 || port > 65535)) {
+      return { error: 'Port must be a valid number between 1 and 65535.' };
+    }
+    payload = {
+      host: externalHost,
+      port: type === 'rsh' ? null : port,
+      username: externalUsername,
+      password: externalPassword,
+    };
+  } else {
+    return { error: 'Unsupported session shortcut type.' };
+  }
+
+  const previousDefaultName = defaultSessionShortcutName(existingShortcut.type, existingShortcut.payload || {});
+  const nextDefaultName = defaultSessionShortcutName(type, payload);
+  const previousDefaultFolderId = defaultSessionShortcutFolderId(existingShortcut.type);
+  const nextDefaultFolderId = defaultSessionShortcutFolderId(type);
+  const currentFolderId = normalizeSessionShortcutFolderId(existingShortcut.folderId, existingShortcut.type);
+  const preservedName = existingShortcut.name && existingShortcut.name !== previousDefaultName
+    ? existingShortcut.name
+    : nextDefaultName;
+  const preservedFolderId = currentFolderId === previousDefaultFolderId
+    ? nextDefaultFolderId
+    : currentFolderId;
+
+  return {
+    shortcut: {
+      ...existingShortcut,
+      type,
+      name: preservedName,
+      folderId: preservedFolderId,
+      payload,
+    },
+  };
+}
+
+async function runSessionContextAction(action, shortcutId) {
+  hideSessionContextMenu();
+  const shortcut = findSessionShortcutById(shortcutId);
+  if (!shortcut) return;
+
+  if (action === 'connect_shortcut') {
+    await launchSessionShortcut(shortcut);
+    if (window.innerWidth <= 700) toggleSidebar(false);
+    return;
+  }
+
+  if (action === 'edit_shortcut') {
+    openSessionModal(shortcut.type, { shortcut });
+    return;
+  }
+
+  if (action === 'rename_shortcut') {
+    const input = await askInputModal({
+      title: 'Rename Session',
+      label: 'Session Name',
+      value: shortcut.name || sessionShortcutDisplayName(shortcut),
+      placeholder: 'Session name',
+      submitText: 'Save',
+    });
+    if (input === null) return;
+    const name = String(input || '').trim().replace(/\s+/g, ' ').slice(0, 80);
+    if (!name) return;
+    updateSessionShortcut(shortcut.id, (existing) => ({ ...existing, name }));
+    return;
+  }
+
+  if (action === 'delete_shortcut') {
+    const ok = window.confirm(`Delete saved session "${sessionShortcutDisplayName(shortcut)}"?`);
+    if (!ok) return;
+    removeSessionShortcut(shortcut.id);
+  }
+}
+
 function showFolderContextMenu(x, y, folderId) {
   const menu = document.getElementById('folder-context-menu');
   const folder = FOLDERS.find((item) => item.id === folderId);
@@ -1909,6 +1863,7 @@ function showFolderContextMenu(x, y, folderId) {
 
   hideSftpContextMenu();
   hideServerContextMenu();
+  hideSessionContextMenu();
 
   menu.dataset.folderId = folder.id;
   menu.innerHTML = [
@@ -2007,6 +1962,7 @@ function showServerContextMenu(x, y, serverId) {
 
   hideSftpContextMenu();
   hideFolderContextMenu();
+  hideSessionContextMenu();
 
   menu.dataset.serverId = server.id;
   menu.innerHTML = [
@@ -3242,6 +3198,237 @@ function addLocalTermTab(shellType = 'powershell', options = {}) {
   return tid;
 }
 
+function addVncTab(options = {}) {
+  const host = options.host || '';
+  const port = options.port || 5900;
+  const password = options.password || '';
+  const label = options.label || `${host}:${port}`;
+
+  if (!host) {
+    console.error('[vnc] No host specified');
+    return null;
+  }
+
+  const tid = `v${++tabCounter}`;
+  const historyId = `vnc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const vncCount = Object.values(termTabs).filter((t) => t.mode === 'vnc').length + 1;
+
+  const btn = document.createElement('div');
+  btn.className = 'tab-term';
+  btn.id = `tabbtn-${tid}`;
+  btn.innerHTML = `
+    <div class="tab-term-inner" data-tabid="${tid}">
+      <div class="tab-dot" style="background:${sDot('unknown')};box-shadow:0 0 5px ${sDot('unknown')}"></div>
+      <span class="tab-label">VNC</span>
+      <span class="tab-num">#${vncCount}</span>
+      <span class="tab-srv-badge" style="display:none"></span>
+    </div>
+    <button class="tab-close" data-tabid="${tid}">&#x00d7;</button>`;
+
+  btn.querySelector('.tab-term-inner').addEventListener('click', () => setActiveTab(tid));
+  btn.querySelector('.tab-close').addEventListener('click', (e) => closeTab(e, tid));
+
+  const panel = document.createElement('div');
+  panel.className = 'tab-panel vnc-panel';
+  panel.id = `panel-${tid}`;
+  panel.innerHTML = `
+    <div class="term-topbar">
+      <div class="term-info">
+        <div class="term-srv-dot" id="term-dot-${tid}" style="background:${sDot('unknown')};box-shadow:0 0 6px ${sDot('unknown')}"></div>
+        <span class="term-srv-name">${escapeHtml(label)}</span>
+        <span class="term-srv-ip">${escapeHtml(host)}:${port}</span>
+        <span class="term-conn-status" id="conn-status-${tid}" style="margin-left:8px;font-size:9px;color:var(--warn);letter-spacing:1px">CONNECTING\u2026</span>
+      </div>
+      <div class="term-actions">
+        <button class="term-btn" id="reconnect-btn-${tid}">RECONNECT</button>
+        <button class="term-btn danger" id="close-btn-${tid}">CLOSE</button>
+      </div>
+    </div>
+    <div class="vnc-body" id="vnc-body-${tid}">
+      <div class="vnc-status vnc-connecting" id="vnc-status-${tid}">
+        <div class="vnc-status-icon">\u23F3</div>
+        <div>Connecting to VNC server...</div>
+      </div>
+    </div>`;
+  document.getElementById('term-panels-host').appendChild(panel);
+
+  panel.querySelector(`#reconnect-btn-${tid}`).addEventListener('click', () => vncReconnect(tid));
+  panel.querySelector(`#close-btn-${tid}`).addEventListener('click', () => closeTab(null, tid));
+
+  termTabs[tid] = {
+    mode: 'vnc',
+    srvId: null, srv: null, pinned: true,
+    historyId,
+    shortcutId: options.shortcutId || null,
+    vncHost: host,
+    vncPort: port,
+    vncPassword: password,
+    connStatus: 'connecting',
+    tabBtnEl: btn, panelEl: panel,
+    sessionId: null,
+    wsUrl: null,
+    rfb: null,
+    unlisten: null,
+    unlistenConnected: null,
+    unlistenDisconnected: null,
+    unlistenError: null,
+  };
+
+  insertLocalTabButton(btn);
+  setActiveTab(tid);
+  void initVncSession(tid);
+  updateMainTerminalLayout();
+  return tid;
+}
+
+async function initVncSession(tid) {
+  const t = termTabs[tid];
+  if (!t || t.mode !== 'vnc') return;
+
+  const statusEl = document.getElementById(`vnc-status-${tid}`);
+  const bodyEl = document.getElementById(`vnc-body-${tid}`);
+  const dotEl = document.getElementById(`term-dot-${tid}`);
+  const connEl = document.getElementById(`conn-status-${tid}`);
+
+  try {
+    // Start VNC proxy via Tauri
+    const result = await invoke('vnc_connect', {
+      host: t.vncHost,
+      port: t.vncPort,
+    });
+
+    t.sessionId = result.session_id;
+    t.wsUrl = result.ws_url;
+
+    // Listen for VNC events
+    t.unlistenConnected = await listen(`vnc-connected-${t.sessionId}`, () => {
+      updateVncTabStatus(tid, 'connected');
+    });
+
+    t.unlistenDisconnected = await listen(`vnc-disconnected-${t.sessionId}`, () => {
+      updateVncTabStatus(tid, 'disconnected');
+    });
+
+    t.unlistenError = await listen(`vnc-error-${t.sessionId}`, (event) => {
+      if (statusEl) {
+        statusEl.className = 'vnc-status vnc-error';
+        statusEl.innerHTML = `<div class="vnc-status-icon">\u26A0</div><div>${escapeHtml(String(event.payload))}</div>`;
+        statusEl.style.display = '';
+      }
+      updateVncTabStatus(tid, 'error');
+    });
+
+    // Hide status, create RFB viewer
+    if (statusEl) statusEl.style.display = 'none';
+
+    // Create noVNC RFB instance
+    const rfb = new RFB(bodyEl, t.wsUrl, {
+      credentials: t.vncPassword ? { password: t.vncPassword } : undefined,
+    });
+
+    rfb.scaleViewport = true;
+    rfb.resizeSession = true;
+
+    rfb.addEventListener('connect', () => {
+      updateVncTabStatus(tid, 'connected');
+    });
+
+    rfb.addEventListener('disconnect', (e) => {
+      if (e.detail.clean) {
+        updateVncTabStatus(tid, 'disconnected');
+      } else {
+        if (statusEl) {
+          statusEl.className = 'vnc-status vnc-error';
+          statusEl.innerHTML = `<div class="vnc-status-icon">\u26A0</div><div>Connection lost</div>`;
+          statusEl.style.display = '';
+        }
+        updateVncTabStatus(tid, 'error');
+      }
+    });
+
+    rfb.addEventListener('securityfailure', (e) => {
+      if (statusEl) {
+        statusEl.className = 'vnc-status vnc-error';
+        statusEl.innerHTML = `<div class="vnc-status-icon">\u26A0</div><div>Authentication failed: ${escapeHtml(e.detail.reason || 'Unknown error')}</div>`;
+        statusEl.style.display = '';
+      }
+      updateVncTabStatus(tid, 'error');
+    });
+
+    t.rfb = rfb;
+
+  } catch (err) {
+    console.error('[vnc] Connection error:', err);
+    if (statusEl) {
+      statusEl.className = 'vnc-status vnc-error';
+      statusEl.innerHTML = `<div class="vnc-status-icon">\u26A0</div><div>${escapeHtml(String(err))}</div>`;
+      statusEl.style.display = '';
+    }
+    updateVncTabStatus(tid, 'error');
+  }
+}
+
+function updateVncTabStatus(tid, status) {
+  const t = termTabs[tid];
+  if (!t) return;
+
+  t.connStatus = status;
+  const dotEl = document.getElementById(`term-dot-${tid}`);
+  const connEl = document.getElementById(`conn-status-${tid}`);
+  const tabDot = t.tabBtnEl?.querySelector('.tab-dot');
+
+  const color = sDot(status === 'connected' ? 'online' : status === 'error' ? 'offline' : 'unknown');
+  const label = status === 'connected' ? 'CONNECTED' : status === 'error' ? 'ERROR' : status === 'disconnected' ? 'DISCONNECTED' : 'CONNECTING\u2026';
+
+  if (dotEl) {
+    dotEl.style.background = color;
+    dotEl.style.boxShadow = `0 0 6px ${color}`;
+  }
+  if (tabDot) {
+    tabDot.style.background = color;
+    tabDot.style.boxShadow = `0 0 5px ${color}`;
+  }
+  if (connEl) {
+    connEl.textContent = label;
+    connEl.style.color = status === 'connected' ? 'var(--accent2)' : status === 'error' ? 'var(--danger)' : 'var(--warn)';
+  }
+  renderSidebar();
+}
+
+async function vncReconnect(tid) {
+  const t = termTabs[tid];
+  if (!t || t.mode !== 'vnc') return;
+
+  // Cleanup existing connection
+  if (t.rfb) {
+    try { t.rfb.disconnect(); } catch {}
+    t.rfb = null;
+  }
+  if (t.sessionId) {
+    try { await invoke('vnc_disconnect', { sessionId: t.sessionId }); } catch {}
+  }
+  if (t.unlistenConnected) { t.unlistenConnected(); t.unlistenConnected = null; }
+  if (t.unlistenDisconnected) { t.unlistenDisconnected(); t.unlistenDisconnected = null; }
+  if (t.unlistenError) { t.unlistenError(); t.unlistenError = null; }
+
+  // Reset UI
+  const statusEl = document.getElementById(`vnc-status-${tid}`);
+  const bodyEl = document.getElementById(`vnc-body-${tid}`);
+  if (statusEl) {
+    statusEl.className = 'vnc-status vnc-connecting';
+    statusEl.innerHTML = `<div class="vnc-status-icon">\u23F3</div><div>Connecting to VNC server...</div>`;
+    statusEl.style.display = '';
+  }
+  // Remove old canvas if any
+  if (bodyEl) {
+    const canvas = bodyEl.querySelector('canvas');
+    if (canvas) canvas.remove();
+  }
+
+  updateVncTabStatus(tid, 'connecting');
+  await initVncSession(tid);
+}
+
 function readTerminalLine(term, promptText, secret = false) {
   return new Promise((resolve) => {
     let value = '';
@@ -3766,31 +3953,48 @@ async function closeTab(e, tid) {
   if (e) e.stopPropagation();
   const t = termTabs[tid]; if (!t) return;
   const wasActive = activeTabId === tid;
-  clearLocalWslFallbackTimer(t);
-  if (t.mode === 'local') flushTerminalInput(t, 'local_shell_write_text');
-  else flushTerminalInput(t, remoteCommand(t, 'write_text'));
 
-  if (t.sessionId) {
-    const disconnectCmd = t.mode === 'local' ? 'local_shell_disconnect' : remoteCommand(t, 'disconnect');
-    try { await invoke(disconnectCmd, { sessionId: t.sessionId }); } catch { }
+  // VNC mode cleanup
+  if (t.mode === 'vnc') {
+    if (t.rfb) {
+      try { t.rfb.disconnect(); } catch {}
+      t.rfb = null;
+    }
+    if (t.sessionId) {
+      try { await invoke('vnc_disconnect', { sessionId: t.sessionId }); } catch {}
+    }
+    if (t.unlistenConnected) t.unlistenConnected();
+    if (t.unlistenDisconnected) t.unlistenDisconnected();
+    if (t.unlistenError) t.unlistenError();
+  } else {
+    // Terminal mode cleanup
+    clearLocalWslFallbackTimer(t);
+    if (t.mode === 'local') flushTerminalInput(t, 'local_shell_write_text');
+    else flushTerminalInput(t, remoteCommand(t, 'write_text'));
+
+    if (t.sessionId) {
+      const disconnectCmd = t.mode === 'local' ? 'local_shell_disconnect' : remoteCommand(t, 'disconnect');
+      try { await invoke(disconnectCmd, { sessionId: t.sessionId }); } catch { }
+    }
+    // Clean up listeners
+    if (t.unlisten) t.unlisten();
+    if (t.unlistenEof) t.unlistenEof();
+    if (t.unlistenClosed) t.unlistenClosed();
+    clearTerminalIoQueues(t);
+    // Clean up xterm
+    if (t.resizeObserver) t.resizeObserver.disconnect();
+    if (t.terminal) t.terminal.dispose();
   }
-  // Clean up listeners
-  if (t.unlisten) t.unlisten();
-  if (t.unlistenEof) t.unlistenEof();
-  if (t.unlistenClosed) t.unlistenClosed();
-  clearTerminalIoQueues(t);
-  // Clean up xterm
-  if (t.resizeObserver) t.resizeObserver.disconnect();
-  if (t.terminal) t.terminal.dispose();
 
   t.tabBtnEl.remove();
   t.panelEl.remove();
   delete termTabs[tid];
 
   if (wasActive) {
-    const vis = Object.entries(termTabs).find(([, t]) => t.mode === 'local' || t.pinned || t.srvId === selId);
+    const vis = Object.entries(termTabs).find(([, t]) => t.mode === 'local' || t.mode === 'vnc' || t.pinned || t.srvId === selId);
     setActiveTab(vis ? vis[0] : 'metrics');
   }
+  renderSidebar();
   refreshSidebarBadges();
   maybeRenderSelectedMetrics();
   updateMainTerminalLayout();
@@ -3898,91 +4102,6 @@ function cleanServerIntelCache() {
   }
 }
 
-function formatUpdatedAgo(ms) {
-  if (!ms) return 'Never';
-  const seconds = Math.max(0, Math.floor((Date.now() - ms) / 1000));
-  if (seconds < 5) return 'Just now';
-  if (seconds < 60) return `${seconds}s ago`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.floor(hours / 24)}d ago`;
-}
-
-function shortErrorText(value) {
-  const text = String(value || 'Unknown error').replace(/\s+/g, ' ').trim();
-  return text.length > 120 ? `${text.slice(0, 117)}...` : text;
-}
-
-function escapeHtml(value) {
-  return String(value)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-function inferBrowserScheme(port) {
-  if ([443, 6443, 8443, 9443].includes(port)) return 'https';
-  if ([80, 81, 3000, 3001, 4000, 5000, 5173, 5601, 8000, 8080, 8081, 8088, 8888, 9000, 9090, 9200, 15672].includes(port)) return 'http';
-  return '';
-}
-
-function normalizeUrlHost(host) {
-  const raw = String(host || '').trim();
-  if (!raw) return '';
-  if (raw.startsWith('[') && raw.endsWith(']')) return raw;
-  if (raw.includes(':')) return `[${raw}]`;
-  return raw;
-}
-
-function buildServiceBrowserUrl(server, service) {
-  if (!service?.is_browser_supported) return '';
-  const host = normalizeUrlHost(server?.host || '');
-  const port = Number(service?.port);
-  if (!host || !Number.isFinite(port) || port <= 0) return '';
-  const scheme = String(service?.browser_url_scheme || inferBrowserScheme(port)).toLowerCase();
-  if (!scheme) return '';
-  const omitPort = (scheme === 'http' && port === 80) || (scheme === 'https' && port === 443);
-  return `${scheme}://${host}${omitPort ? '' : `:${port}`}/`;
-}
-
-function renderMetricsServiceRows(server, services) {
-  if (!Array.isArray(services) || !services.length) {
-    return '<div class="mx-service-empty">No listening services found in latest scan.</div>';
-  }
-
-  return services
-    .slice()
-    .sort((a, b) => Number(a?.port || 0) - Number(b?.port || 0))
-    .slice(0, 24)
-    .map((service) => {
-      const port = Number(service?.port || 0);
-      const protocol = String(service?.protocol || 'tcp').toUpperCase();
-      const bind = String(service?.bind || '*');
-      const serviceName = escapeHtml(String(service?.service || `Port ${port || '?'}`));
-      const processName = String(service?.process || '').trim();
-      const openUrl = buildServiceBrowserUrl(server, service);
-      const encodedUrl = openUrl ? encodeURIComponent(openUrl) : '';
-      const processMeta = processName ? ` · ${escapeHtml(processName)}` : '';
-      const meta = `${escapeHtml(protocol)} · ${escapeHtml(bind)}:${port || '?'}${processMeta}`;
-
-      return `
-        <div class="mx-service-item">
-          <div class="mx-service-main">
-            <div class="mx-service-name">${serviceName}</div>
-            <div class="mx-service-meta">${meta}</div>
-          </div>
-          ${openUrl
-            ? `<button class="mx-service-open-btn" data-open-url="${encodedUrl}" title="Open ${serviceName}">Open</button>`
-            : '<span class="mx-service-chip">Non-web</span>'}
-        </div>`;
-    })
-    .join('');
-}
-
 async function openServiceInBrowser(url) {
   const target = String(url || '').trim();
   if (!/^https?:\/\//i.test(target)) return;
@@ -3998,19 +4117,7 @@ async function openServiceInBrowser(url) {
 }
 
 function renderSensitiveValue(value, kind = 'text') {
-  const raw = String(value ?? '\u2014');
-  const normalized = raw.trim().toLowerCase();
-  if (
-    !metricsSensitiveMasked
-    || !raw.trim()
-    || raw.trim() === '\u2014'
-    || normalized === 'unavailable'
-    || normalized === 'unknown'
-  ) {
-    return escapeHtml(raw);
-  }
-  if (kind === 'coordinates') return '\u2022\u2022.\u2022\u2022\u2022\u2022, \u2022\u2022.\u2022\u2022\u2022\u2022';
-  return '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022';
+  return renderSensitiveValueHelper(value, kind, metricsSensitiveMasked);
 }
 
 function sftpEntryKind(entry) {
@@ -4100,127 +4207,6 @@ async function refreshServerIntel(server, force = false) {
   }
 }
 
-function seedFromServer(s) {
-  const input = `${s.id}|${s.name}|${s.loc}|${s.lat}|${s.lng}`;
-  let h = 7;
-  for (let i = 0; i < input.length; i++) h = (h * 31 + input.charCodeAt(i)) >>> 0;
-  return h;
-}
-
-function seededInt(seed, offset, min, max) {
-  const x = Math.sin(seed + offset) * 10000;
-  const unit = x - Math.floor(x);
-  return Math.floor(unit * (max - min + 1)) + min;
-}
-
-function clamp(value, min, max) {
-  return Math.min(max, Math.max(min, value));
-}
-
-function seededSeries(seed, offset, points, min, max, wobble = 7) {
-  const series = [];
-  const span = Math.max(1, max - min);
-  let current = seededInt(seed, offset, min, max);
-  for (let i = 0; i < points; i++) {
-    const drift = seededInt(seed + offset * 97, i + 1, -wobble, wobble);
-    const pull = seededInt(seed + offset * 17, i + 53, -2, 2);
-    current = clamp(current + drift + pull, min, max);
-    // Light smoothing so lines look like telemetry, not noise
-    const prev = i > 0 ? series[i - 1] : current;
-    series.push(Math.round((prev * 0.45) + (current * 0.55)));
-  }
-  // Normalize range to avoid flat lines
-  if (Math.max(...series) - Math.min(...series) < Math.max(3, span * 0.06)) {
-    return series.map((v, i) => clamp(v + ((i % 3) - 1) * 2, min, max));
-  }
-  return series;
-}
-
-function seriesAvg(values) {
-  return Math.round(values.reduce((acc, n) => acc + n, 0) / values.length);
-}
-
-function sparklineSvg(values, color) {
-  const w = 240, h = 64, pad = 6;
-  const min = Math.min(...values), max = Math.max(...values);
-  const xStep = (w - pad * 2) / Math.max(1, values.length - 1);
-  const yScale = (h - pad * 2) / Math.max(1, max - min);
-  const points = values.map((v, i) => {
-    const x = pad + i * xStep;
-    const y = h - pad - ((v - min) * yScale);
-    return `${x.toFixed(2)},${y.toFixed(2)}`;
-  });
-  const area = `${points.join(' ')} ${(w - pad).toFixed(2)},${(h - pad).toFixed(2)} ${pad.toFixed(2)},${(h - pad).toFixed(2)}`;
-  const [lx, ly] = points[points.length - 1].split(',');
-
-  return `
-    <svg class="mx-spark-svg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true">
-      <polyline class="mx-spark-grid" points="${pad},${h * 0.22} ${w - pad},${h * 0.22}"></polyline>
-      <polyline class="mx-spark-grid" points="${pad},${h * 0.50} ${w - pad},${h * 0.50}"></polyline>
-      <polyline class="mx-spark-grid" points="${pad},${h * 0.78} ${w - pad},${h * 0.78}"></polyline>
-      <polygon points="${area}" fill="${color}22"></polygon>
-      <polyline points="${points.join(' ')}" fill="none" stroke="${color}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"></polyline>
-      <circle cx="${lx}" cy="${ly}" r="3.6" fill="${color}"></circle>
-    </svg>`;
-}
-
-function buildAttentionIssues({
-  incidents24h,
-  pendingUpdates,
-  cpu,
-  ram,
-  disk,
-  lastPatchDays,
-  firewallLabel,
-  servicesHealthy,
-  servicesTotal,
-  statusReason,
-}) {
-  const issues = [];
-
-  if (incidents24h > 0) {
-    issues.push({
-      severity: incidents24h > 1 ? 'bad' : 'warn',
-      message: `${incidents24h} incident${incidents24h > 1 ? 's' : ''} detected in the last 24h.`,
-    });
-  }
-  if (cpu >= 85) issues.push({ severity: 'bad', message: `CPU usage is high at ${cpu}%.` });
-  else if (cpu >= 70) issues.push({ severity: 'warn', message: `CPU usage is elevated at ${cpu}%.` });
-
-  if (ram >= 90) issues.push({ severity: 'bad', message: `Memory pressure is critical at ${ram}%.` });
-  else if (ram >= 75) issues.push({ severity: 'warn', message: `Memory usage is high at ${ram}%.` });
-
-  if (disk >= 90) issues.push({ severity: 'bad', message: `Disk usage is critical at ${disk}%.` });
-  else if (disk >= 80) issues.push({ severity: 'warn', message: `Disk usage is high at ${disk}%.` });
-
-  if (pendingUpdates > 3) issues.push({ severity: 'bad', message: `${pendingUpdates} pending updates need patching.` });
-  else if (pendingUpdates > 0) issues.push({ severity: 'warn', message: `${pendingUpdates} pending update${pendingUpdates > 1 ? 's' : ''} available.` });
-
-  if (lastPatchDays > 21) issues.push({ severity: 'bad', message: `Last patch cycle was ${lastPatchDays} days ago.` });
-  else if (lastPatchDays > 7) issues.push({ severity: 'warn', message: `Patch cycle age is ${lastPatchDays} days.` });
-
-  if (firewallLabel !== 'Enabled') {
-    issues.push({ severity: 'warn', message: 'Firewall state needs review.' });
-  }
-
-  if (servicesHealthy < servicesTotal) {
-    issues.push({
-      severity: servicesHealthy <= Math.max(1, servicesTotal - 2) ? 'bad' : 'warn',
-      message: `${servicesTotal - servicesHealthy} service${servicesTotal - servicesHealthy > 1 ? 's are' : ' is'} not healthy.`,
-    });
-  }
-
-  if (typeof statusReason === 'string' && statusReason.trim()) {
-    issues.push({ severity: 'warn', message: `Connectivity note: ${statusReason.trim()}` });
-  }
-
-  if (!issues.length) {
-    issues.push({ severity: 'ok', message: 'No active attention issues detected.' });
-  }
-
-  return issues;
-}
-
 function renderMetrics(s) {
   if (!s) { showMEmpty(); return; }
   document.getElementById('m-empty').style.display = 'none';
@@ -4236,38 +4222,16 @@ function renderMetrics(s) {
     void refreshServerIntel(s);
   }
 
-  const seed = seedFromServer(s);
-  const env = ['production', 'staging', 'development'][seededInt(seed, 1, 0, 2)];
-  const provider = ['AWS', 'Azure', 'GCP', 'Hetzner', 'DigitalOcean'][seededInt(seed, 2, 0, 4)];
-  const osSeed = ['Ubuntu 24.04', 'Debian 12', 'Rocky Linux 9', 'AlmaLinux 9'][seededInt(seed, 3, 0, 3)];
-  const osPretty = live?.os_pretty || [live?.os_name, live?.os_version].filter(Boolean).join(' ') || osSeed;
+  // Real data from live SSH probe
+  const osPretty = live?.os_pretty || [live?.os_name, live?.os_version].filter(Boolean).join(' ') || null;
   const kernel = live?.kernel || '';
   const hostLabel = live?.hostname || s.host;
-  const availability = (99 + seededInt(seed, 4, 0, 95) / 100).toFixed(2);
-  const cpuSeed = seededInt(seed, 5, 8, 82);
-  const ramSeed = seededInt(seed, 6, 12, 88);
-  const diskSeed = seededInt(seed, 7, 18, 86);
-  const cpuLive = Number.isFinite(Number(live?.cpu_used_percent)) ? clamp(Math.round(Number(live.cpu_used_percent)), 1, 99) : null;
-  const ramLive = Number.isFinite(Number(live?.memory_used_percent)) ? clamp(Math.round(Number(live.memory_used_percent)), 1, 99) : null;
-  const diskLive = Number.isFinite(Number(live?.disk_used_percent)) ? clamp(Math.round(Number(live.disk_used_percent)), 1, 99) : null;
-  const cpu = cpuLive ?? cpuSeed;
-  const ram = ramLive ?? ramSeed;
-  const disk = diskLive ?? diskSeed;
-  const netIn = seededInt(seed, 8, 40, 840);
-  const netOut = seededInt(seed, 9, 25, 610);
+  const cpu = Number.isFinite(Number(live?.cpu_used_percent)) ? clamp(Math.round(Number(live.cpu_used_percent)), 1, 99) : null;
+  const ram = Number.isFinite(Number(live?.memory_used_percent)) ? clamp(Math.round(Number(live.memory_used_percent)), 1, 99) : null;
+  const disk = Number.isFinite(Number(live?.disk_used_percent)) ? clamp(Math.round(Number(live.disk_used_percent)), 1, 99) : null;
   const uptimeSecondsLive = Number(live?.uptime_seconds);
-  const uptimeDays = Number.isFinite(uptimeSecondsLive) ? Math.max(0, Math.floor(uptimeSecondsLive / 86400)) : seededInt(seed, 10, 3, 184);
-  const heartbeatSec = seededInt(seed, 11, 4, 59);
-  const incidents24h = seededInt(seed, 12, 0, 2);
-  const pendingUpdates = seededInt(seed, 13, 0, 7);
-  const lastPatchDays = seededInt(seed, 14, 0, 27);
-  const rebootDays = seededInt(seed, 15, 1, 45);
-  const fallbackServicesTotal = seededInt(seed, 16, 6, 15);
+  const uptimeDays = Number.isFinite(uptimeSecondsLive) ? Math.max(0, Math.floor(uptimeSecondsLive / 86400)) : null;
   const liveServices = Array.isArray(live?.services) ? live.services : [];
-  const servicesTotal = liveServices.length > 0 ? liveServices.length : fallbackServicesTotal;
-  const servicesHealthy = liveServices.length > 0
-    ? liveServices.length
-    : Math.max(servicesTotal - incidents24h, servicesTotal - 2);
   const browserServices = liveServices.filter((service) => Boolean(service?.is_browser_supported)).length;
   const serviceScanError = typeof live?.services_error === 'string' ? live.services_error.trim() : '';
   const serviceRowsHtml = renderMetricsServiceRows(s, liveServices);
@@ -4279,23 +4243,11 @@ function renderMetrics(s) {
         : 'No listening services detected in latest scan.'
     : 'Press Refresh to load listening services.';
 
-  const statusClass = incidents24h === 0 ? 'st-online' : incidents24h === 1 ? 'st-warn' : 'st-offline';
-  const statusLabel = incidents24h === 0 ? 'HEALTHY' : incidents24h === 1 ? 'DEGRADED' : 'ATTENTION';
-  const patchClass = pendingUpdates === 0 ? 'pc-ok' : pendingUpdates <= 3 ? 'pc-warn' : 'pc-bad';
-  const patchLabel = pendingUpdates === 0 ? 'Up to date' : pendingUpdates <= 3 ? 'Needs updates' : 'High patch backlog';
-  const firewallLabel = seededInt(seed, 17, 0, 10) > 1 ? 'Enabled' : 'Review';
-  const firewallClass = firewallLabel === 'Enabled' ? 'pc-ok' : 'pc-warn';
-  const loadBase = Math.round((netIn + netOut) / 2);
-  const cpuSeries = seededSeries(seed, 30, 24, Math.max(4, cpu - 26), Math.min(98, cpu + 17), 8);
-  const ramSeries = seededSeries(seed, 40, 24, Math.max(8, ram - 20), Math.min(98, ram + 12), 6);
-  const netSeries = seededSeries(seed, 50, 24, Math.max(20, Math.round(loadBase * 0.45)), Math.max(40, Math.round(loadBase * 1.05)), 45);
-  const incidentSeries = seededSeries(seed, 60, 7, 0, 3, 2);
-  const cpuColor = cpu > 75 ? '#ff3b5c' : cpu > 55 ? '#f5a623' : '#00bfff';
-  const ramColor = ram > 80 ? '#ff3b5c' : ram > 60 ? '#f5a623' : '#00ffaa';
-  const netColor = '#19a7ff';
-  const capFill = Math.round((disk * 0.52) + (ram * 0.30) + (cpu * 0.18));
-  const serviceHeadroom = servicesTotal > 0 ? Math.round((servicesHealthy / servicesTotal) * 100) : 100;
-  const avgIncident = (incidentSeries.reduce((acc, n) => acc + n, 0) / incidentSeries.length).toFixed(1);
+  // Status based on connection state
+  const statusClass = s.status === 'online' ? 'st-online' : s.status === 'offline' ? 'st-offline' : 'st-warn';
+  const statusLabel = s.status === 'online' ? 'ONLINE' : s.status === 'offline' ? 'OFFLINE' : 'UNKNOWN';
+  const cpuColor = cpu !== null ? (cpu > 75 ? '#ff3b5c' : cpu > 55 ? '#f5a623' : '#00bfff') : '#666';
+  const ramColor = ram !== null ? (ram > 80 ? '#ff3b5c' : ram > 60 ? '#f5a623' : '#00ffaa') : '#666';
   const liveLinked = hasLiveSshSessionForServer(s.id);
   const liveActive = liveLinked && metricsLiveEnabled;
   const refreshInfo = liveState.error
@@ -4307,9 +4259,9 @@ function renderMetrics(s) {
       : liveState.lastUpdatedMs
         ? `Last update ${formatUpdatedAgo(liveState.lastUpdatedMs)} · manual refresh only`
         : 'No data yet · press Refresh';
-  const metricsSource = liveActive ? 'Live telemetry' : (live ? 'Last captured' : 'Estimated');
-  const osBadge = live?.os_name || osSeed;
-  const kernelBadge = kernel || 'Unavailable';
+  const metricsSource = liveActive ? 'Live telemetry' : (live ? 'Last captured' : 'No data');
+  const osBadge = live?.os_name || 'Unknown';
+  const kernelBadge = kernel || 'Unknown';
   const cpuCores = Number.isFinite(Number(live?.cpu_cores)) ? Math.max(1, Math.round(Number(live.cpu_cores))) : null;
   const totalMemory = formatMemoryMb(live?.memory_total_mb);
   const locationValue = s.loc || 'Unknown';
@@ -4318,7 +4270,7 @@ function renderMetrics(s) {
   const specSource = live ? 'Specs from latest SSH refresh' : 'Press Refresh to load hardware specs';
   const whoisIp = intel?.ip || s.resolvedIp || 'Unavailable';
   const whoisLocation = intel?.location || locationValue || 'Unknown';
-  const whoisProvider = intel?.provider || intel?.org || provider;
+  const whoisProvider = intel?.provider || intel?.org || 'Unknown';
   const whoisOrg = intel?.org || 'Unavailable';
   const whoisAsn = intel?.asn || 'Unavailable';
   const whoisDomain = intel?.domain || 'Unavailable';
@@ -4329,260 +4281,194 @@ function renderMetrics(s) {
       ? `Whois lookup warning: ${escapeHtml(intelState.error)}`
       : `Whois updated ${formatUpdatedAgo(intelState.lastUpdatedMs)} via ${escapeHtml(whoisSource)}`;
   const attentionIssues = buildAttentionIssues({
-    incidents24h,
-    pendingUpdates,
     cpu,
     ram,
     disk,
-    lastPatchDays,
-    firewallLabel,
-    servicesHealthy,
-    servicesTotal,
     statusReason: s.statusReason,
   });
 
+  const diskColor = disk !== null ? (disk > 80 ? '#ff3b5c' : disk > 65 ? '#f5a623' : '#00bfff') : '#444';
+
   mc.innerHTML = `
     <div class="mx-shell">
-      <div class="mx-hero">
-        <div class="mx-hero-left">
-          <div class="mx-eyebrow">Node Health View</div>
-          <div class="mx-title-row">
-            <div class="mhdr-name">${s.name} <span style="font-size:12px;color:var(--muted);font-weight:400">\u00b7 ${s.loc}</span></div>
-            <div class="mx-title-actions">
-              <div class="m-status ${statusClass}">${statusLabel}</div>
-              <button
-                class="mx-mask-btn ${metricsSensitiveMasked ? 'is-masked' : ''}"
-                id="mx-mask-toggle-btn"
-                title="${metricsSensitiveMasked ? 'Show sensitive values' : 'Hide sensitive values'}"
-              >&#128065; ${metricsSensitiveMasked ? 'Masked' : 'Visible'}</button>
-              <button
-                class="mx-live-btn ${liveActive ? 'is-on' : 'is-off'}"
-                id="mx-live-toggle-btn"
-                title="${liveLinked ? 'Toggle live metrics polling' : 'Connect SSH to enable live metrics'}"
-                ${liveLinked ? '' : 'disabled'}
-              >Live: ${liveActive ? 'On' : 'Off'}</button>
-              <button class="mx-refresh-btn ${liveState.loading ? 'is-loading' : ''}" id="mx-refresh-btn" ${liveState.loading ? 'disabled' : ''}>${liveState.loading ? 'Refreshing...' : 'Refresh'}</button>
-              <div class="mx-refresh-meta ${liveState.error ? 'is-error' : ''}">${refreshInfo}</div>
-            </div>
-          </div>
-          <div class="mx-subline">${live ? 'LIVE PROBE' : env.toUpperCase()} \u00b7 ${escapeHtml(whoisProvider)} \u00b7 ${osPretty}</div>
-          <div class="mx-tag-row">
-            <span class="mx-tag">${metricsSource}</span>
-            <span class="mx-tag">Heartbeat ${heartbeatSec}s</span>
-            <span class="mx-tag">Uptime ${uptimeDays}d</span>
-            <span class="mx-tag">Services ${servicesHealthy}/${servicesTotal}</span>
+      <!-- Header -->
+      <div class="mx-header">
+        <div class="mx-header-left">
+          <div class="mx-server-name">${escapeHtml(s.name)}</div>
+          <div class="mx-server-location">${escapeHtml(locationValue)}</div>
+          <div class="mx-server-meta">
+            <span><span class="m-status ${statusClass}">${statusLabel}</span></span>
+            ${osPretty ? `<span>${escapeHtml(osPretty)}</span>` : ''}
+            ${uptimeDays !== null ? `<span>Uptime: ${uptimeDays}d</span>` : ''}
           </div>
         </div>
-        <div class="mx-radials">
-          <div class="mx-radial-card">
-            <div class="mx-radial" style="--pct:${availability};--col:#00ffaa">
-              <span>${availability}%</span>
-            </div>
-            <div class="mx-radial-label">Availability</div>
+        <div class="mx-header-right">
+          <div class="mx-header-actions">
+            <button class="mx-btn ${metricsSensitiveMasked ? 'is-active' : ''}" id="mx-mask-toggle-btn">
+              ${metricsSensitiveMasked ? 'Show Values' : 'Hide Values'}
+            </button>
+            <button class="mx-btn ${liveActive ? 'is-active' : ''}" id="mx-live-toggle-btn" ${liveLinked ? '' : 'disabled'}>
+              Live: ${liveActive ? 'On' : 'Off'}
+            </button>
+            <button class="mx-btn is-primary ${liveState.loading ? 'is-loading' : ''}" id="mx-refresh-btn" ${liveState.loading ? 'disabled' : ''}>
+              ${liveState.loading ? 'Refreshing...' : 'Refresh'}
+            </button>
           </div>
-          <div class="mx-radial-card">
-            <div class="mx-radial" style="--pct:${Math.round((100 - pendingUpdates * 8))};--col:${pendingUpdates > 3 ? '#ff3b5c' : pendingUpdates > 0 ? '#f5a623' : '#00bfff'}">
-              <span>${pendingUpdates}</span>
-            </div>
-            <div class="mx-radial-label">Pending Patches</div>
-          </div>
-          <div class="mx-radial-card">
-            <div class="mx-radial" style="--pct:${capFill};--col:${capFill > 76 ? '#ff3b5c' : capFill > 58 ? '#f5a623' : '#00bfff'}">
-              <span>${capFill}%</span>
-            </div>
-            <div class="mx-radial-label">Capacity Pressure</div>
-          </div>
+          <div class="mx-refresh-info ${liveState.error ? 'is-error' : ''}">${refreshInfo}</div>
         </div>
       </div>
 
-      <div class="mx-kpi-grid">
-        <article class="mx-kpi">
-          <div class="mx-kpi-head">
-            <div class="mx-kpi-title">CPU Load</div>
-            <div class="mx-kpi-value" style="color:${cpuColor}">${cpu}%</div>
+      <!-- Resource Gauges -->
+      <div class="mx-gauges">
+        <div class="mx-gauge">
+          <div class="mx-gauge-ring" style="--pct:${cpu ?? 0};--col:${cpuColor}">
+            <span class="mx-gauge-value">${cpu !== null ? `${cpu}%` : '\u2014'}</span>
           </div>
-          <div class="mx-kpi-sub">24h avg ${seriesAvg(cpuSeries)}% \u00b7 peak ${Math.max(...cpuSeries)}%</div>
-          ${sparklineSvg(cpuSeries, cpuColor)}
-        </article>
-
-        <article class="mx-kpi">
-          <div class="mx-kpi-head">
-            <div class="mx-kpi-title">Memory Use</div>
-            <div class="mx-kpi-value" style="color:${ramColor}">${ram}%</div>
+          <div class="mx-gauge-label">CPU Usage</div>
+          <div class="mx-gauge-sub">${cpu !== null ? `${100 - cpu}% available` : ''}</div>
+          ${cpu === null ? '<div class="mx-gauge-empty">No data</div>' : ''}
+        </div>
+        <div class="mx-gauge">
+          <div class="mx-gauge-ring" style="--pct:${ram ?? 0};--col:${ramColor}">
+            <span class="mx-gauge-value">${ram !== null ? `${ram}%` : '\u2014'}</span>
           </div>
-          <div class="mx-kpi-sub">Working set ${seriesAvg(ramSeries)}% \u00b7 free ${Math.max(6, 100 - ram)}%</div>
-          ${sparklineSvg(ramSeries, ramColor)}
-        </article>
-
-        <article class="mx-kpi">
-          <div class="mx-kpi-head">
-            <div class="mx-kpi-title">Network Throughput</div>
-            <div class="mx-kpi-value" style="color:${netColor}">${netIn}/${netOut}</div>
+          <div class="mx-gauge-label">Memory Usage</div>
+          <div class="mx-gauge-sub">${ram !== null ? `${100 - ram}% free` : ''}</div>
+          ${ram === null ? '<div class="mx-gauge-empty">No data</div>' : ''}
+        </div>
+        <div class="mx-gauge">
+          <div class="mx-gauge-ring" style="--pct:${disk ?? 0};--col:${diskColor}">
+            <span class="mx-gauge-value">${disk !== null ? `${disk}%` : '\u2014'}</span>
           </div>
-          <div class="mx-kpi-sub">Mbps in/out \u00b7 avg ${seriesAvg(netSeries)} Mbps</div>
-          ${sparklineSvg(netSeries, netColor)}
-        </article>
+          <div class="mx-gauge-label">Disk Usage</div>
+          <div class="mx-gauge-sub">${disk !== null ? `${100 - disk}% free` : ''}</div>
+          ${disk === null ? '<div class="mx-gauge-empty">No data</div>' : ''}
+        </div>
       </div>
 
-      <div class="mx-bottom-grid">
-        <section class="mx-panel">
-          <div class="mx-panel-title">System Specs</div>
-          <div class="mx-list-row">
-            <span>Location</span>
-            <strong>${escapeHtml(locationValue)}</strong>
+      <!-- Info Cards -->
+      <div class="mx-cards">
+        <!-- System Specs -->
+        <div class="mx-card">
+          <div class="mx-card-title">System Specs</div>
+          <div class="mx-card-rows">
+            <div class="mx-row">
+              <span class="mx-row-label">Host</span>
+              <span class="mx-row-value">${renderSensitiveValue(hostLabel)}</span>
+            </div>
+            <div class="mx-row">
+              <span class="mx-row-label">OS</span>
+              <span class="mx-row-value">${escapeHtml(osBadge)}</span>
+            </div>
+            <div class="mx-row">
+              <span class="mx-row-label">Kernel</span>
+              <span class="mx-row-value">${escapeHtml(kernelBadge)}</span>
+            </div>
+            <div class="mx-row">
+              <span class="mx-row-label">CPU Cores</span>
+              <span class="mx-row-value">${cpuCores ?? '\u2014'}</span>
+            </div>
+            <div class="mx-row">
+              <span class="mx-row-label">Memory</span>
+              <span class="mx-row-value">${totalMemory}</span>
+            </div>
           </div>
-          <div class="mx-list-row">
-            <span>Coordinates</span>
-            <strong>${renderSensitiveValue(coordValue, 'coordinates')}</strong>
-          </div>
-          <div class="mx-list-row">
-            <span>Host</span>
-            <strong>${renderSensitiveValue(hostLabel)}</strong>
-          </div>
-          <div class="mx-list-row">
-            <span>CPU Cores</span>
-            <strong>${cpuCores ?? '\u2014'}</strong>
-          </div>
-          <div class="mx-list-row">
-            <span>Total Memory</span>
-            <strong>${totalMemory}</strong>
-          </div>
-          <div class="mx-security-note">${specSource}</div>
-        </section>
+          <div class="mx-card-note">${specSource}</div>
+        </div>
 
-        <section class="mx-panel">
-          <div class="mx-panel-title">Network Whois</div>
-          <div class="mx-list-row">
-            <span>IP Address</span>
-            <strong>${renderSensitiveValue(whoisIp)}</strong>
+        <!-- Network Info -->
+        <div class="mx-card">
+          <div class="mx-card-title">Network Info</div>
+          <div class="mx-card-rows">
+            <div class="mx-row">
+              <span class="mx-row-label">IP Address</span>
+              <span class="mx-row-value">${renderSensitiveValue(whoisIp)}</span>
+            </div>
+            <div class="mx-row">
+              <span class="mx-row-label">Provider</span>
+              <span class="mx-row-value">${escapeHtml(whoisProvider)}</span>
+            </div>
+            <div class="mx-row">
+              <span class="mx-row-label">Organization</span>
+              <span class="mx-row-value">${escapeHtml(whoisOrg)}</span>
+            </div>
+            <div class="mx-row">
+              <span class="mx-row-label">ASN</span>
+              <span class="mx-row-value">${escapeHtml(whoisAsn)}</span>
+            </div>
+            <div class="mx-row">
+              <span class="mx-row-label">Location</span>
+              <span class="mx-row-value">${escapeHtml(whoisLocation)}</span>
+            </div>
           </div>
-          <div class="mx-list-row">
-            <span>Provider</span>
-            <strong>${escapeHtml(whoisProvider)}</strong>
-          </div>
-          <div class="mx-list-row">
-            <span>Organization</span>
-            <strong>${escapeHtml(whoisOrg)}</strong>
-          </div>
-          <div class="mx-list-row">
-            <span>ASN</span>
-            <strong>${escapeHtml(whoisAsn)}</strong>
-          </div>
-          <div class="mx-list-row">
-            <span>Geo Location</span>
-            <strong>${escapeHtml(whoisLocation)}</strong>
-          </div>
-          <div class="mx-list-row">
-            <span>Domain</span>
-            <strong>${renderSensitiveValue(whoisDomain)}</strong>
-          </div>
-          <div class="mx-security-note">${whoisStatus}</div>
-        </section>
+          <div class="mx-card-note">${whoisStatus}</div>
+        </div>
 
-        <section class="mx-panel">
-          <div class="mx-panel-title">Security Posture</div>
-          <div class="mx-list-row">
-            <span>Status</span>
-            <strong class="${statusClass}">${statusLabel}</strong>
+        <!-- Open Services -->
+        <div class="mx-card">
+          <div class="mx-card-title">Open Services</div>
+          <div class="mx-services">
+            ${liveServices.length > 0 ? liveServices.map((svc) => `
+              <div class="mx-service">
+                <div class="mx-service-info">
+                  <div class="mx-service-name">${escapeHtml(svc.name || 'Unknown')}</div>
+                  <div class="mx-service-port">${escapeHtml(svc.addr || '')}:${svc.port || ''}</div>
+                </div>
+                ${svc.is_browser_supported ? `<button class="mx-service-btn mx-service-open-btn" data-open-url="${encodeURIComponent(`http://${s.host}:${svc.port}`)}">Open</button>` : ''}
+              </div>
+            `).join('') : `<div class="mx-service-empty">${escapeHtml(servicesStatusNoteRaw)}</div>`}
           </div>
-          <div class="mx-list-row">
-            <span>Operating System</span>
-            <strong>${osBadge}</strong>
-          </div>
-          <div class="mx-list-row">
-            <span>Kernel</span>
-            <strong>${kernelBadge}</strong>
-          </div>
-          <div class="mx-list-row">
-            <span>Firewall</span>
-            <strong class="${firewallClass}">${firewallLabel}</strong>
-          </div>
-          <div class="mx-list-row">
-            <span>Patch State</span>
-            <strong class="${patchClass}">${patchLabel}</strong>
-          </div>
-          <div class="mx-list-row">
-            <span>Last Patch Cycle</span>
-            <strong class="${lastPatchDays <= 7 ? 'pc-ok' : lastPatchDays <= 21 ? 'pc-warn' : 'pc-bad'}">${lastPatchDays}d ago</strong>
-          </div>
-          <div class="mx-list-row">
-            <span>Credential Exposure</span>
-            <strong class="pc-ok">Protected</strong>
-          </div>
-          <div class="mx-security-note">SSH host/user/auth details are intentionally hidden in this panel.</div>
-        </section>
+        </div>
 
-        <section class="mx-panel">
-          <div class="mx-panel-title">Open Services</div>
-          <div class="mx-service-list">
-            ${serviceRowsHtml}
-          </div>
-          <div class="mx-security-note">${escapeHtml(servicesStatusNoteRaw)}</div>
-        </section>
-
-        <section class="mx-panel">
-          <div class="mx-panel-title">Attention Queue</div>
-          <div class="mx-attention-list">
+        <!-- Alerts -->
+        <div class="mx-card">
+          <div class="mx-card-title">Alerts</div>
+          <div class="mx-alerts">
             ${attentionIssues.map((item) => `
-              <div class="mx-attention-item ${item.severity}">
-                <span class="mx-attention-dot"></span>
-                <span>${escapeHtml(item.message)}</span>
-              </div>`).join('')}
+              <div class="mx-alert ${item.severity}">
+                <span class="mx-alert-dot"></span>
+                <span class="mx-alert-text">${escapeHtml(item.message)}</span>
+              </div>
+            `).join('')}
           </div>
-          <div class="mx-security-note">Red items should be addressed first, then warnings.</div>
-        </section>
+        </div>
 
-        <section class="mx-panel">
-          <div class="mx-panel-title">Reliability Timeline</div>
-          <div class="mx-incident-chart">
-            ${incidentSeries.map((v, i) => `
-              <div class="mx-ibar-wrap">
-                <div class="mx-ibar ${v === 0 ? 'ok' : v === 1 ? 'warn' : 'bad'}" style="height:${24 + v * 16}px"></div>
-                <span>D-${6 - i}</span>
-              </div>`).join('')}
-          </div>
-          <div class="mx-list-row">
-            <span>24h Incident Count</span>
-            <strong class="${incidents24h === 0 ? 'pc-ok' : incidents24h === 1 ? 'pc-warn' : 'pc-bad'}">${incidents24h}</strong>
-          </div>
-          <div class="mx-list-row">
-            <span>7d Daily Incident Avg</span>
-            <strong class="${avgIncident < 0.6 ? 'pc-ok' : avgIncident < 1.4 ? 'pc-warn' : 'pc-bad'}">${avgIncident}</strong>
-          </div>
-          <div class="mx-list-row">
-            <span>Last Reboot</span>
-            <strong class="pc-ok">${rebootDays}d ago</strong>
-          </div>
-        </section>
-
-        <section class="mx-panel">
-          <div class="mx-panel-title">Capacity Breakdown</div>
-          <div class="mx-cap-row">
-            <div class="mx-cap-label">Disk</div>
-            <div class="mx-cap-bar"><div style="width:${disk}%;background:${disk > 80 ? '#ff3b5c' : disk > 65 ? '#f5a623' : '#00bfff'}"></div></div>
-            <div class="mx-cap-val">${disk}%</div>
-          </div>
-          <div class="mx-cap-row">
-            <div class="mx-cap-label">Memory</div>
-            <div class="mx-cap-bar"><div style="width:${ram}%;background:${ram > 80 ? '#ff3b5c' : ram > 60 ? '#f5a623' : '#00ffaa'}"></div></div>
-            <div class="mx-cap-val">${ram}%</div>
-          </div>
-          <div class="mx-cap-row">
-            <div class="mx-cap-label">CPU</div>
-            <div class="mx-cap-bar"><div style="width:${cpu}%;background:${cpu > 75 ? '#ff3b5c' : cpu > 55 ? '#f5a623' : '#00bfff'}"></div></div>
-            <div class="mx-cap-val">${cpu}%</div>
-          </div>
-          <div class="mx-cap-row">
-            <div class="mx-cap-label">Service Headroom</div>
-            <div class="mx-cap-bar"><div style="width:${serviceHeadroom}%;background:#00ffaa"></div></div>
-            <div class="mx-cap-val">${serviceHeadroom}%</div>
-          </div>
-        </section>
+        <!-- Capacity -->
+        <div class="mx-card" style="grid-column: span 2">
+          <div class="mx-card-title">Resource Capacity</div>
+          ${cpu !== null || ram !== null || disk !== null ? `
+            <div class="mx-capacity">
+              ${cpu !== null ? `
+                <div class="mx-cap-item">
+                  <span class="mx-cap-label">CPU</span>
+                  <div class="mx-cap-bar"><div style="width:${cpu}%;background:${cpuColor}"></div></div>
+                  <span class="mx-cap-value">${cpu}%</span>
+                </div>
+              ` : ''}
+              ${ram !== null ? `
+                <div class="mx-cap-item">
+                  <span class="mx-cap-label">Memory</span>
+                  <div class="mx-cap-bar"><div style="width:${ram}%;background:${ramColor}"></div></div>
+                  <span class="mx-cap-value">${ram}%</span>
+                </div>
+              ` : ''}
+              ${disk !== null ? `
+                <div class="mx-cap-item">
+                  <span class="mx-cap-label">Disk</span>
+                  <div class="mx-cap-bar"><div style="width:${disk}%;background:${diskColor}"></div></div>
+                  <span class="mx-cap-value">${disk}%</span>
+                </div>
+              ` : ''}
+            </div>
+          ` : '<div class="mx-card-note">Connect via SSH to view resource data</div>'}
+        </div>
       </div>
 
-      <div class="mx-footnote">
-        <div class="mx-footnote-title">Live Stream Available In Terminal</div>
-        <div class="mx-footnote-copy">Live metrics run only while an SSH tab is connected. Without SSH, metrics keep last data and update on manual refresh.</div>
+      <!-- Footer -->
+      <div class="mx-footer">
+        <div class="mx-footer-text">
+          Live metrics are available when connected via SSH. Without an active connection, data will show the last captured values.
+        </div>
       </div>
     </div>`;
 
@@ -4623,104 +4509,31 @@ function renderMetrics(s) {
 /* ══════════════════════════════════════════════════════════
    SIDEBAR COLLAPSE (desktop)
 ══════════════════════════════════════════════════════════ */
-let sidebarCollapsed = false;
 function toggleSidebar_collapse() {
-  const sb = document.getElementById('sidebar');
-  const arrow = document.getElementById('sb-toggle-arrow');
-  const label = document.querySelector('.sb-toggle-label');
-  sidebarCollapsed = !sidebarCollapsed;
-  sb.classList.toggle('collapsed', sidebarCollapsed);
-  arrow.textContent = sidebarCollapsed ? '\u203a' : '\u2039';
-  if (label) label.textContent = sidebarCollapsed ? 'EXPAND' : 'COLLAPSE';
-  setTimeout(() => { map.invalidateSize(); }, 250);
+  layoutController?.toggleSidebarCollapse();
 }
 
 function toggleSidebar(force) {
-  if (window.innerWidth > 700) return;
-  const sb = document.getElementById('sidebar'), ov = document.getElementById('sidebar-overlay');
-  const isOpen = force !== undefined ? force : !sb.classList.contains('open');
-  sb.classList.toggle('open', isOpen); ov.classList.toggle('open', isOpen);
+  layoutController?.toggleSidebar(force);
 }
 
 function refreshRailActive() {
-  document.querySelectorAll('.sb-rail-item').forEach(el => el.classList.remove('active'));
-  if (selId !== null) document.getElementById(`rail-${selId}`)?.classList.add('active');
+  layoutController?.refreshRailActive();
 }
-
-/* ══════════════════════════════════════════════════════════
-   MAP COLLAPSE
-══════════════════════════════════════════════════════════ */
-let mapCollapsed = false;
-let mapHeightBeforeCollapse = '50%';
 
 function toggleMap() {
-  const ms = document.getElementById('map-section');
-  const btn = document.getElementById('map-toggle-btn');
-  mapCollapsed = !mapCollapsed;
-  if (mapCollapsed) {
-    mapHeightBeforeCollapse = ms.style.height || '50%';
-    ms.classList.add('collapsed');
-    btn.textContent = '\u25b8 Expand';
-  } else {
-    ms.classList.remove('collapsed');
-    ms.style.height = mapHeightBeforeCollapse;
-    btn.textContent = '\u25be Collapse';
-    setTimeout(() => { map.invalidateSize(); }, 260);
-  }
+  layoutController?.toggleMap();
 }
-
-/* ══════════════════════════════════════════════════════════
-   MAXIMIZE / MINIMIZE
-══════════════════════════════════════════════════════════ */
-let isMaximized = false;
-let preMax = { mapCollapsed: false, mapHeight: null };
 
 function toggleMaximize() {
-  const btn = document.getElementById('tab-maximize-btn');
-  const icon = document.getElementById('maximize-icon');
-  const label = document.getElementById('maximize-label');
-
-  if (!isMaximized) {
-    preMax.mapCollapsed = mapCollapsed;
-    preMax.mapHeight = document.getElementById('map-section').style.height || null;
-
-    if (!mapCollapsed) {
-      mapCollapsed = true;
-      const ms = document.getElementById('map-section');
-      if (!preMax.mapHeight) preMax.mapHeight = ms.style.height || null;
-      ms.classList.add('collapsed');
-      document.getElementById('map-toggle-btn').textContent = '\u25b8 Expand';
-    }
-
-    isMaximized = true;
-    btn.classList.add('maximized');
-    icon.textContent = '\u2921';
-    label.textContent = 'MIN';
-    updateMainTerminalLayout();
-    setTimeout(() => { map.invalidateSize(); }, 260);
-
-  } else {
-    if (!preMax.mapCollapsed && mapCollapsed) {
-      mapCollapsed = false;
-      const ms = document.getElementById('map-section');
-      ms.classList.remove('collapsed');
-      if (preMax.mapHeight) ms.style.height = preMax.mapHeight;
-      document.getElementById('map-toggle-btn').textContent = '\u25be Collapse';
-      mapHeightBeforeCollapse = preMax.mapHeight || '50%';
-    }
-
-    isMaximized = false;
-    btn.classList.remove('maximized');
-    icon.textContent = '\u2922';
-    label.textContent = 'MAX';
-    updateMainTerminalLayout();
-    setTimeout(() => { map.invalidateSize(); }, 260);
-  }
+  layoutController?.toggleMaximize();
 }
 
-/* ══════════════════════════════════════════════════════════
-   SETTINGS MODAL
-══════════════════════════════════════════════════════════ */
+const SESSION_MODAL_STATE = {
+  mode: 'create',
+  shortcutId: null,
+};
+
 function createSessionModal() {
   if (document.getElementById('session-modal')) return;
   const modal = document.createElement('div');
@@ -4865,6 +4678,22 @@ function createSessionModal() {
             <span>Prompt for username on connect</span>
           </label>
         </div>
+        <div id="session-vnc-config" style="display:none">
+          <div class="session-row">
+            <label class="session-label">VNC Host</label>
+            <input class="session-input" id="session-vnc-host" placeholder="e.g. 192.0.2.50">
+          </div>
+          <div class="session-row session-row-inline">
+            <div class="session-col session-col-sm">
+              <label class="session-label">VNC Port</label>
+              <input class="session-input" id="session-vnc-port" type="number" min="1" max="65535" value="5900">
+            </div>
+            <div class="session-col">
+              <label class="session-label">Password (optional)</label>
+              <input class="session-input" id="session-vnc-password" type="password" placeholder="Leave empty if none">
+            </div>
+          </div>
+        </div>
         <div id="session-external-config" style="display:none">
           <div class="session-row" id="session-external-host-row">
             <label class="session-label" id="session-external-host-label">Remote Host</label>
@@ -4935,10 +4764,10 @@ async function browseSessionSftpKeyFile() {
 }
 
 function isExternalLauncherSession(type) {
+  // VNC is now embedded, not external
   return type === 'rsh'
     || type === 'mosh'
     || type === 'rdp'
-    || type === 'vnc'
     || type === 'ftp'
     || type === 'serial';
 }
@@ -4979,17 +4808,7 @@ function buildExternalSessionCommand(type, options) {
     return `Start-Process -FilePath 'mstsc.exe' -ArgumentList '/v:${endpoint}'`;
   }
 
-  if (type === 'vnc') {
-    const endpoint = `${host}:${port || 5900}`;
-    return [
-      '$vnc = Get-Command vncviewer -ErrorAction SilentlyContinue',
-      'if ($vnc) {',
-      `  & $vnc.Source ${psQuote(endpoint)}`,
-      '} else {',
-      `  Write-Host ${psQuote('[nodegrid] vncviewer not found in PATH. Install VNC Viewer and retry.')}`,
-      '}',
-    ].join('\n');
-  }
+  // VNC is now embedded, no external command needed
 
   if (type === 'ftp') {
     const effectivePort = port || 21;
@@ -5059,7 +4878,7 @@ function sessionHintForType(type) {
   if (type === 'sftp') return 'Open SFTP using a saved SSH profile or enter new credentials.';
   if (type === 'wsl_shell') return 'Start a local WSL shell tab (falls back automatically when WSL is unavailable).';
   if (type === 'rdp') return 'Launch Windows Remote Desktop (mstsc) to the target host.';
-  if (type === 'vnc') return 'Launch VNC Viewer (vncviewer) for the target endpoint.';
+  if (type === 'vnc') return 'Open embedded VNC viewer for the target endpoint.';
   if (type === 'ftp') return 'Open FTP target in system explorer/browser.';
   if (type === 'serial') return 'Launch serial connection via PuTTY (putty).';
   if (type === 'rsh') return 'Launch RSH from local shell (requires rsh client in PATH).';
@@ -5100,6 +4919,7 @@ function renderSessionModalFields() {
   const externalPasswordLabel = document.getElementById('session-external-password-label');
   const externalSerialPortRow = document.getElementById('session-external-serial-port-row');
   const externalBaudRow = document.getElementById('session-external-baud-row');
+  const vncConfig = document.getElementById('session-vnc-config');
   const hint = document.getElementById('session-hint');
   const errorEl = document.getElementById('session-error');
 
@@ -5116,12 +4936,13 @@ function renderSessionModalFields() {
   const isTelnet = type === 'telnet';
   const isSftp = type === 'sftp';
   const isWsl = type === 'wsl_shell';
+  const isVnc = type === 'vnc';
   const isExternal = isExternalLauncherSession(type);
   const telnetSource = String(telnetConfigSource?.value || 'saved');
   const isTelnetNew = isTelnet && telnetSource === 'new';
   const sftpSource = String(sftpCredentialSource?.value || 'saved');
   const isSftpNew = isSftp && sftpSource === 'new';
-  const needsServer = !isLocal && !isWsl && !isExternal && !isSshNew && !isTelnetNew && !isSftpNew;
+  const needsServer = !isLocal && !isWsl && !isExternal && !isSshNew && !isTelnetNew && !isSftpNew && !isVnc;
   const sftpAuthMethod = String(sftpAuthMethodEl?.value || 'Password');
   const useSftpKey = isSftpNew && sftpAuthMethod === 'Key';
 
@@ -5138,6 +4959,7 @@ function renderSessionModalFields() {
   if (serverRow) serverRow.style.display = needsServer ? '' : 'none';
   if (usernameRow) usernameRow.style.display = isSsh && !isSshNew ? '' : 'none';
   if (forceRow) forceRow.style.display = isSsh && !isSshNew ? '' : 'none';
+  if (vncConfig) vncConfig.style.display = isVnc ? '' : 'none';
   if (externalWrap) externalWrap.style.display = isExternal ? '' : 'none';
   if (externalHostRow) externalHostRow.style.display = type === 'serial' ? 'none' : '';
   if (externalPortRow) externalPortRow.style.display = (type === 'serial' || type === 'rsh') ? 'none' : '';
@@ -5203,10 +5025,13 @@ function renderSessionModalFields() {
   serverSelect.value = preferred;
 }
 
-function openSessionModal(initialType = 'local_shell') {
+function openSessionModal(initialType = 'local_shell', options = {}) {
   createSessionModal();
   const modal = document.getElementById('session-modal');
   if (!modal) return;
+  const shortcut = options?.shortcut || null;
+  SESSION_MODAL_STATE.mode = shortcut ? 'edit-shortcut' : 'create';
+  SESSION_MODAL_STATE.shortcutId = shortcut?.id || null;
 
   const typeEl = document.getElementById('session-type');
   const localShellEl = document.getElementById('session-local-shell');
@@ -5234,9 +5059,13 @@ function openSessionModal(initialType = 'local_shell') {
   const sftpPasswordEl = document.getElementById('session-sftp-password');
   const sftpKeyPathEl = document.getElementById('session-sftp-key-path');
   const sftpPassphraseEl = document.getElementById('session-sftp-passphrase');
+  const vncHostEl = document.getElementById('session-vnc-host');
+  const vncPortEl = document.getElementById('session-vnc-port');
+  const vncPasswordEl = document.getElementById('session-vnc-password');
   const errorEl = document.getElementById('session-error');
+  const startBtn = document.getElementById('session-start-btn');
 
-  if (typeEl) typeEl.value = initialType;
+  if (typeEl) typeEl.value = shortcut?.type || initialType;
   if (localShellEl) localShellEl.value = 'powershell';
   if (usernameEl) usernameEl.value = '';
   if (forceEl) forceEl.checked = false;
@@ -5262,9 +5091,27 @@ function openSessionModal(initialType = 'local_shell') {
   if (sftpPasswordEl) sftpPasswordEl.value = '';
   if (sftpKeyPathEl) sftpKeyPathEl.value = '';
   if (sftpPassphraseEl) sftpPassphraseEl.value = '';
+  if (vncHostEl) vncHostEl.value = '';
+  if (vncPortEl) vncPortEl.value = '5900';
+  if (vncPasswordEl) vncPasswordEl.value = '';
   if (errorEl) {
     errorEl.style.display = 'none';
     errorEl.textContent = '';
+  }
+  if (startBtn) startBtn.textContent = shortcut ? 'Save Shortcut' : 'Start Session';
+
+  if (shortcut) {
+    const payload = shortcut.payload || {};
+    if (localShellEl) localShellEl.value = normalizeLocalShellType(payload.shellType || 'powershell');
+    if (externalHostEl) externalHostEl.value = String(payload.host || '');
+    if (externalPortEl) externalPortEl.value = payload.port ? String(payload.port) : '';
+    if (externalUsernameEl) externalUsernameEl.value = String(payload.username || '');
+    if (externalPasswordEl) externalPasswordEl.value = String(payload.password || '');
+    if (externalSerialPortEl) externalSerialPortEl.value = String(payload.serialPort || '');
+    if (externalBaudEl) externalBaudEl.value = payload.baud ? String(payload.baud) : '115200';
+    if (vncHostEl) vncHostEl.value = String(payload.host || '');
+    if (vncPortEl) vncPortEl.value = payload.port ? String(payload.port) : '5900';
+    if (vncPasswordEl) vncPasswordEl.value = String(payload.password || '');
   }
 
   renderSessionModalFields();
@@ -5274,6 +5121,10 @@ function openSessionModal(initialType = 'local_shell') {
 function closeSessionModal() {
   const modal = document.getElementById('session-modal');
   if (!modal) return;
+  SESSION_MODAL_STATE.mode = 'create';
+  SESSION_MODAL_STATE.shortcutId = null;
+  const startBtn = document.getElementById('session-start-btn');
+  if (startBtn) startBtn.textContent = 'Start Session';
   modal.style.display = 'none';
 }
 
@@ -5304,6 +5155,9 @@ async function startSessionFromModal() {
   const sftpPassword = String(document.getElementById('session-sftp-password')?.value || '');
   const sftpKeyPath = String(document.getElementById('session-sftp-key-path')?.value || '').trim();
   const sftpPassphrase = String(document.getElementById('session-sftp-passphrase')?.value || '');
+  const vncHost = String(document.getElementById('session-vnc-host')?.value || '').trim();
+  const vncPortRaw = String(document.getElementById('session-vnc-port')?.value || '5900').trim();
+  const vncPassword = String(document.getElementById('session-vnc-password')?.value || '');
   const localShellType = normalizeLocalShellType(document.getElementById('session-local-shell')?.value || 'powershell');
   const errorEl = document.getElementById('session-error');
   const fail = (message) => {
@@ -5311,6 +5165,22 @@ async function startSessionFromModal() {
     errorEl.textContent = message;
     errorEl.style.display = 'block';
   };
+
+  if (SESSION_MODAL_STATE.mode === 'edit-shortcut') {
+    const existingShortcut = findSessionShortcutById(SESSION_MODAL_STATE.shortcutId);
+    if (!existingShortcut) {
+      fail('This saved session no longer exists.');
+      return;
+    }
+    const result = await buildShortcutUpdateFromModal(existingShortcut);
+    if (result?.error) {
+      fail(result.error);
+      return;
+    }
+    updateSessionShortcut(existingShortcut.id, () => result.shortcut);
+    closeSessionModal();
+    return;
+  }
 
   if (type === 'local_shell') {
     addLocalTermTab(localShellType);
@@ -5329,6 +5199,25 @@ async function startSessionFromModal() {
       type: 'wsl_shell',
       name: 'Local WSL',
       payload: {},
+    });
+    closeSessionModal();
+    return;
+  }
+
+  if (type === 'vnc') {
+    const parsedPort = Number.parseInt(vncPortRaw || '5900', 10);
+    if (!vncHost) {
+      fail('VNC host is required.');
+      return;
+    }
+    if (!Number.isInteger(parsedPort) || parsedPort < 1 || parsedPort > 65535) {
+      fail('Port must be a valid number between 1 and 65535.');
+      return;
+    }
+    addSessionShortcut({
+      type: 'vnc',
+      name: `VNC ${vncHost}:${parsedPort}`,
+      payload: { host: vncHost, port: parsedPort, password: vncPassword },
     });
     closeSessionModal();
     return;
@@ -5981,7 +5870,11 @@ async function loadServers() {
     ]);
     FOLDERS = withSystemFolders(folders);
     collapsedFolderIds = new Set(
-      Array.from(collapsedFolderIds).filter((id) => id === UNGROUPED_COLLAPSE_ID || FOLDERS.some((folder) => folder.id === id))
+      Array.from(collapsedFolderIds).filter((id) =>
+        id === UNGROUPED_COLLAPSE_ID
+        || FOLDERS.some((folder) => folder.id === id)
+        || SESSION_SHORTCUT_FOLDER_ID_SET.has(id)
+      )
     );
     saveCollapsedFolders();
     SRV = configs.map(c => {
@@ -6059,7 +5952,7 @@ function switchToSftp() { setActiveTab('sftp'); }
   let dragging = false, startY = 0, startH = 0;
 
   handle.addEventListener('mousedown', e => {
-    if (mapCollapsed) return;
+    if (layoutController?.isMapCollapsed()) return;
     dragging = true; startY = e.clientY; startH = mapSec.offsetHeight;
     handle.classList.add('dragging');
     document.body.style.cursor = 'row-resize';
@@ -6071,7 +5964,7 @@ function switchToSftp() { setActiveTab('sftp'); }
     const totalH = main.offsetHeight;
     const newH = Math.max(80, Math.min(totalH - 120, startH + dy));
     mapSec.style.height = newH + 'px';
-    mapHeightBeforeCollapse = newH + 'px';
+    layoutController?.setMapHeightBeforeCollapse(newH + 'px');
   });
   window.addEventListener('mouseup', () => {
     if (!dragging) return;
@@ -6090,7 +5983,7 @@ function switchToSftp() { setActiveTab('sftp'); }
   let dragging = false, startX = 0, startW = 0;
 
   handle.addEventListener('mousedown', e => {
-    if (sidebarCollapsed) return;
+    if (layoutController?.isSidebarCollapsed()) return;
     dragging = true; startX = e.clientX; startW = sb.offsetWidth;
     handle.classList.add('dragging');
     document.body.style.cursor = 'col-resize';
@@ -6237,12 +6130,17 @@ document.addEventListener('click', (ev) => {
   if (folderMenu && folderMenu.style.display !== 'none' && !folderMenu.contains(ev.target)) {
     hideFolderContextMenu();
   }
+  const sessionMenu = document.getElementById('session-context-menu');
+  if (sessionMenu && sessionMenu.style.display !== 'none' && !sessionMenu.contains(ev.target)) {
+    hideSessionContextMenu();
+  }
 });
 window.addEventListener('resize', () => {
   hideTabAddMenu();
   hideSftpContextMenu();
   hideServerContextMenu();
   hideFolderContextMenu();
+  hideSessionContextMenu();
   syncRecentSessionViewport();
 });
 document.addEventListener('keydown', (ev) => {
@@ -6251,6 +6149,7 @@ document.addEventListener('keydown', (ev) => {
     hideSftpContextMenu();
     hideServerContextMenu();
     hideFolderContextMenu();
+    hideSessionContextMenu();
     closeSessionModal();
   }
 });
