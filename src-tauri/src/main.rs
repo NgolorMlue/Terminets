@@ -351,6 +351,8 @@ fn local_shell_launch_specs(
 ) -> Vec<LocalShellLaunchSpec> {
     let mut specs = bundled_shell_launch_specs(app, shell, cwd);
     let zsh_via_bash_cmd = "if command -v zsh >/dev/null 2>&1; then exec zsh -l; else echo '[nodegrid] zsh not found, falling back to bash'; exec bash -l; fi";
+    let wsl_fallback_via_bash_cmd =
+        "echo '[nodegrid] wsl not found, falling back to bash'; exec bash -l";
     match shell {
         "cmd" => {
             specs.push(shell_spec(
@@ -394,6 +396,36 @@ fn local_shell_launch_specs(
                 Vec::new(),
             ));
         }
+        "wsl" => {
+            specs.push(shell_spec(
+                "wsl.exe",
+                ["--cd", "~"],
+                false,
+                Vec::new(),
+            ));
+            for spec in bundled_shell_launch_specs(app, "bash", cwd) {
+                specs.push(shell_spec(
+                    spec.program.clone(),
+                    ["-lc", wsl_fallback_via_bash_cmd],
+                    spec.set_cwd,
+                    spec.env.clone(),
+                ));
+            }
+            for path in known_windows_shell_paths("bash") {
+                specs.push(shell_spec(
+                    path.into_os_string(),
+                    ["-lc", wsl_fallback_via_bash_cmd],
+                    true,
+                    Vec::new(),
+                ));
+            }
+            specs.push(shell_spec(
+                "bash.exe",
+                ["-lc", wsl_fallback_via_bash_cmd],
+                true,
+                Vec::new(),
+            ));
+        }
         _ => {
             specs.push(shell_spec(
                 "powershell.exe",
@@ -422,6 +454,7 @@ fn local_shell_launch_specs(
     match shell {
         "cmd" => specs.push(shell_spec("sh", ["-l"], true, Vec::new())),
         "zsh" => specs.push(shell_spec("zsh", ["-l"], true, Vec::new())),
+        "wsl" => specs.push(shell_spec("bash", ["-l"], true, Vec::new())),
         "powershell" => {
             specs.push(shell_spec(
                 "pwsh",
@@ -498,11 +531,11 @@ impl LocalShellManager {
         let child = child_opt.ok_or_else(|| {
             if last_err.is_empty() {
                 format!("Failed to start local shell '{}'", shell)
-            } else if shell == "bash" || shell == "zsh" {
+            } else if shell == "bash" || shell == "zsh" || shell == "wsl" {
                 format!(
                     "Failed to start local shell '{}': {}. Embedded runtime not found. \
 Place shell files under resources/shell-runtime (for example bin/{}.exe or usr/bin/{}.exe).",
-                    shell, last_err, shell, shell
+                    shell, last_err, "bash", "bash"
                 )
             } else {
                 format!("Failed to start local shell '{}': {}", shell, last_err)
@@ -872,6 +905,18 @@ async fn start_local_terminal(terminal_type: Option<String>) -> Result<(), Strin
         let zsh_via_bash_cmd = "if command -v zsh >/dev/null 2>&1; then exec zsh -l; else echo '[nodegrid] zsh not found, falling back to bash'; exec bash -l; fi";
         if kind == "cmd" {
             candidates.push((std::process::Command::new("cmd.exe"), true));
+        } else if kind == "wsl" {
+            let mut wsl = std::process::Command::new("wsl.exe");
+            wsl.args(["--cd", "~"]);
+            candidates.push((wsl, false));
+            for path in known_windows_shell_paths("bash") {
+                let mut bash = std::process::Command::new(path);
+                bash.arg("-l");
+                candidates.push((bash, true));
+            }
+            let mut bash = std::process::Command::new("bash.exe");
+            bash.arg("-l");
+            candidates.push((bash, true));
         } else if kind == "bash" {
             for path in known_windows_shell_paths("bash") {
                 let mut bash = std::process::Command::new(path);

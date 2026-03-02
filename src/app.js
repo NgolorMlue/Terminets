@@ -21,6 +21,10 @@ const STORAGE_KEY = 'nodegrid_servers';
 const FOLDER_STORAGE_KEY = 'nodegrid_folders';
 const FOLDER_COLLAPSE_STORAGE_KEY = 'nodegrid_folder_collapse';
 const UNGROUPED_COLLAPSE_ID = '__ungrouped__';
+const SESSION_FOLDER_ID = '__sessions__';
+const SESSION_FOLDER_NAME = 'Sessions';
+const SESSION_SHORTCUT_STORAGE_KEY = 'nodegrid_session_shortcuts';
+const SESSION_SHORTCUT_LIMIT = 300;
 const RECENT_SESSION_STORAGE_KEY = 'nodegrid_recent_local_sessions';
 const RECENT_SESSION_LIMIT = 20;
 const _get = () => { try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || []; } catch { return []; } };
@@ -122,7 +126,10 @@ const STATUS_REFRESH_INTERVAL_MS = 15000;
 const METRICS_LIVE_REFRESH_INTERVAL_MS = 4000;
 const TERMINAL_INPUT_FLUSH_MS = 2;
 const TERMINAL_OUTPUT_FLUSH_MS = 4;
+const WSL_FALLBACK_DELAY_MS = 60000;
+const WSL_MISSING_PROMPT_MARKER = 'the windows subsystem for linux is not installed';
 let recentLocalSessions = loadRecentSessions();
+let SESSION_SHORTCUTS = loadSessionShortcuts();
 let sidebarSuppressClickUntilMs = 0;
 let sidebarPointerDragState = null;
 let collapsedFolderIds = loadCollapsedFolders();
@@ -153,6 +160,23 @@ function normalizeFolderName(value) {
   return name.replace(/\s+/g, ' ').slice(0, 64);
 }
 
+function isSessionFolderId(value) {
+  return String(value || '').trim() === SESSION_FOLDER_ID;
+}
+
+function withSystemFolders(folders) {
+  const normalized = Array.isArray(folders)
+    ? folders
+      .map((folder) => ({
+        id: String(folder?.id || '').trim(),
+        name: normalizeFolderName(folder?.name || ''),
+      }))
+      .filter((folder) => folder.id && folder.name && !isSessionFolderId(folder.id))
+    : [];
+
+  return [{ id: SESSION_FOLDER_ID, name: SESSION_FOLDER_NAME, system: true }, ...normalized];
+}
+
 function normalizeFolderId(value) {
   const id = String(value || '').trim();
   if (!id) return null;
@@ -170,6 +194,9 @@ function folderNameById(folderId) {
 function folderIconSvg(kind = 'folder') {
   if (kind === 'ungrouped') {
     return '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.5"></circle><path d="M12 2.5v4"></path><path d="M12 17.5v4"></path><path d="M2.5 12h4"></path><path d="M17.5 12h4"></path></svg>';
+  }
+  if (kind === 'sessions') {
+    return '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5.5" width="17" height="13" rx="2"></rect><path d="M7.5 9.5h9"></path><path d="M7.5 13h6"></path></svg>';
   }
   return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 7.5h6l1.6 2h9.4v8.8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2V7.5Z"></path><path d="M3.5 7.5V5.8a2 2 0 0 1 2-2h4.3l1.4 1.7h7.3a2 2 0 0 1 2 2v2"></path></svg>';
 }
@@ -432,6 +459,108 @@ function formatMemoryMb(value) {
   if (mb >= 1024 * 1024) return `${(mb / (1024 * 1024)).toFixed(2)} TB`;
   if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`;
   return `${Math.round(mb)} MB`;
+}
+
+function loadSessionShortcuts() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(SESSION_SHORTCUT_STORAGE_KEY) || '[]');
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map(normalizeSessionShortcutEntry)
+      .filter(Boolean)
+      .slice(0, SESSION_SHORTCUT_LIMIT);
+  } catch {
+    return [];
+  }
+}
+
+function saveSessionShortcuts() {
+  try {
+    localStorage.setItem(
+      SESSION_SHORTCUT_STORAGE_KEY,
+      JSON.stringify(SESSION_SHORTCUTS.slice(0, SESSION_SHORTCUT_LIMIT))
+    );
+  } catch {
+    // Ignore localStorage write failures.
+  }
+}
+
+function normalizeSessionShortcutType(value) {
+  const type = String(value || '').toLowerCase();
+  const allowed = new Set([
+    'local_shell',
+    'wsl_shell',
+    'rsh',
+    'mosh',
+    'rdp',
+    'vnc',
+    'ftp',
+    'serial',
+  ]);
+  return allowed.has(type) ? type : null;
+}
+
+function normalizeSessionShortcutEntry(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+  const type = normalizeSessionShortcutType(entry.type);
+  if (!type) return null;
+  const id = String(entry.id || '').trim() || crypto.randomUUID();
+  return {
+    id,
+    type,
+    name: String(entry.name || '').trim(),
+    payload: entry.payload && typeof entry.payload === 'object' ? entry.payload : {},
+    createdAt: Number(entry.createdAt) || Date.now(),
+  };
+}
+
+function sessionShortcutDisplayName(shortcut) {
+  if (!shortcut) return 'Session';
+  if (shortcut.name) return shortcut.name;
+  const payload = shortcut.payload || {};
+
+  if (shortcut.type === 'local_shell') return `Local ${localShellLabel(payload.shellType || 'powershell')}`;
+  if (shortcut.type === 'wsl_shell') return 'Local WSL';
+  if (shortcut.type === 'serial') return `Serial ${payload.serialPort || ''}`.trim();
+
+  const host = String(payload.host || '').trim();
+  const port = Number(payload.port);
+  if (host && Number.isFinite(port) && port > 0) return `${shortcut.type.toUpperCase()} ${host}:${port}`;
+  if (host) return `${shortcut.type.toUpperCase()} ${host}`;
+  return shortcut.type.toUpperCase();
+}
+
+function sessionShortcutMeta(shortcut) {
+  const payload = shortcut?.payload || {};
+  if (shortcut?.type === 'local_shell') return 'LOCAL';
+  if (shortcut?.type === 'wsl_shell') return 'WSL';
+  if (shortcut?.type === 'serial') return `${payload.serialPort || 'SERIAL'} @ ${payload.baud || 115200}`;
+  const host = String(payload.host || '').trim();
+  const port = Number(payload.port);
+  if (host && Number.isFinite(port) && port > 0) return `${host}:${port}`;
+  return shortcut?.type ? shortcut.type.toUpperCase() : 'SESSION';
+}
+
+function addSessionShortcut(entry) {
+  const normalized = normalizeSessionShortcutEntry({
+    ...entry,
+    id: crypto.randomUUID(),
+    createdAt: Date.now(),
+  });
+  if (!normalized) return;
+  SESSION_SHORTCUTS = [normalized, ...SESSION_SHORTCUTS].slice(0, SESSION_SHORTCUT_LIMIT);
+  saveSessionShortcuts();
+  renderSidebar();
+  refreshSidebarBadges();
+}
+
+function removeSessionShortcut(shortcutId) {
+  const id = String(shortcutId || '').trim();
+  if (!id) return;
+  SESSION_SHORTCUTS = SESSION_SHORTCUTS.filter((item) => item.id !== id);
+  saveSessionShortcuts();
+  renderSidebar();
+  refreshSidebarBadges();
 }
 
 function loadRecentSessions() {
@@ -786,7 +915,7 @@ function setTerminalPickerVisible(visible) {
 
 function normalizeLocalShellType(shellType) {
   const value = String(shellType || '').toLowerCase();
-  if (value === 'cmd' || value === 'bash' || value === 'zsh') return value;
+  if (value === 'cmd' || value === 'bash' || value === 'zsh' || value === 'wsl') return value;
   return 'powershell';
 }
 
@@ -795,6 +924,7 @@ function localShellLabel(shellType) {
   if (kind === 'cmd') return 'CMD';
   if (kind === 'bash') return 'Bash';
   if (kind === 'zsh') return 'Zsh';
+  if (kind === 'wsl') return 'WSL';
   return 'PowerShell';
 }
 
@@ -1185,6 +1315,29 @@ async function persistServerOrder() {
   }
 }
 
+async function launchSessionShortcut(shortcut) {
+  if (!shortcut) return;
+  const payload = shortcut.payload || {};
+
+  if (shortcut.type === 'local_shell') {
+    addLocalTermTab(normalizeLocalShellType(payload.shellType || 'powershell'));
+    return;
+  }
+  if (shortcut.type === 'wsl_shell') {
+    addLocalTermTab('wsl');
+    return;
+  }
+
+  if (isExternalLauncherSession(shortcut.type)) {
+    try {
+      const command = buildExternalSessionCommand(shortcut.type, payload);
+      await launchExternalCommandSession(command);
+    } catch (error) {
+      window.alert(`Failed to launch saved ${shortcut.type.toUpperCase()} session: ${String(error)}`);
+    }
+  }
+}
+
 function renderSidebarServerItem(server, list, rail, options = {}) {
   const pingText = typeof server.latencyMs === 'number' ? `${server.latencyMs}ms` : server.status === 'offline' ? 'OFF' : '\u2014';
   const pingColor = latencyColor(server.latencyMs, server.status);
@@ -1238,6 +1391,42 @@ function renderSidebarServerItem(server, list, rail, options = {}) {
   rail.appendChild(railItem);
 }
 
+function renderSidebarSessionItem(shortcut, list, options = {}) {
+  const indented = Boolean(options.indented);
+  const label = escapeHtml(sessionShortcutDisplayName(shortcut));
+  const meta = escapeHtml(sessionShortcutMeta(shortcut));
+
+  const el = document.createElement('div');
+  el.className = `snode snode-session${indented ? ' snode-in-folder' : ''}`;
+  el.id = `ssn-${shortcut.id}`;
+  el.dataset.shortcutId = shortcut.id;
+  el.title = `${sessionShortcutDisplayName(shortcut)} · Left click to launch, right click to remove`;
+  el.innerHTML = `<div class="snode-dot" style="background:#ffd84d;box-shadow:0 0 6px #ffd84d88"></div>
+    <span class="snode-icon" title="Session Shortcut">${serverIconSvg('terminal')}</span>
+    <div class="snode-main"><div class="snode-name">${label}</div></div>
+    <div class="snode-right"><div class="snode-ping" style="color:#ffd98a">${meta}</div></div>`;
+
+  el.addEventListener('click', async (ev) => {
+    if (Date.now() < sidebarSuppressClickUntilMs) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      return;
+    }
+    await launchSessionShortcut(shortcut);
+    if (window.innerWidth <= 700) toggleSidebar(false);
+  });
+
+  el.addEventListener('contextmenu', (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    const ok = window.confirm(`Remove saved session "${sessionShortcutDisplayName(shortcut)}"?`);
+    if (!ok) return;
+    removeSessionShortcut(shortcut.id);
+  });
+
+  list.appendChild(el);
+}
+
 function renderSidebar() {
   const list = document.getElementById('sb-list');
   const rail = document.getElementById('sb-rail');
@@ -1253,6 +1442,7 @@ function renderSidebar() {
   }
 
   const groupedServers = new Map();
+  const sessionShortcuts = SESSION_SHORTCUTS.slice(0, SESSION_SHORTCUT_LIMIT);
   FOLDERS.forEach((folder) => groupedServers.set(folder.id, []));
   const ungroupedServers = [];
   SRV.forEach((server) => {
@@ -1263,27 +1453,34 @@ function renderSidebar() {
 
   FOLDERS.forEach((folder) => {
     const collapsed = isFolderCollapsed(folder.id);
+    const isSystemSessionFolder = isSessionFolderId(folder.id);
     const folderRow = document.createElement('div');
-    folderRow.className = `sb-folder-row sb-folder-drop-target${collapsed ? ' collapsed' : ''}`;
+    folderRow.className = `sb-folder-row sb-folder-drop-target${collapsed ? ' collapsed' : ''}${isSystemSessionFolder ? ' sb-folder-system' : ''}`;
     folderRow.dataset.folderId = folder.id;
     folderRow.dataset.dropFolderId = folder.id;
     folderRow.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-    folderRow.innerHTML = `<span class="sb-folder-caret">${collapsed ? '&#9656;' : '&#9662;'}</span><span class="sb-folder-icon">${folderIconSvg('folder')}</span><span class="sb-folder-name">${escapeHtml(folder.name)}</span><span class="sb-folder-count">${(groupedServers.get(folder.id) || []).length}</span>`;
+    const folderCount = (groupedServers.get(folder.id) || []).length + (isSystemSessionFolder ? sessionShortcuts.length : 0);
+    folderRow.innerHTML = `<span class="sb-folder-caret">${collapsed ? '&#9656;' : '&#9662;'}</span><span class="sb-folder-icon">${folderIconSvg(isSystemSessionFolder ? 'sessions' : 'folder')}</span><span class="sb-folder-name">${escapeHtml(folder.name)}</span><span class="sb-folder-count">${folderCount}</span>`;
     folderRow.addEventListener('click', (ev) => {
       if (Date.now() < sidebarSuppressClickUntilMs) return;
       ev.preventDefault();
       ev.stopPropagation();
       toggleFolderCollapsed(folder.id);
     });
-    folderRow.addEventListener('contextmenu', (ev) => {
-      ev.preventDefault();
-      ev.stopPropagation();
-      showFolderContextMenu(ev.clientX, ev.clientY, folder.id);
-    });
+    if (!isSystemSessionFolder) {
+      folderRow.addEventListener('contextmenu', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        showFolderContextMenu(ev.clientX, ev.clientY, folder.id);
+      });
+    }
     list.appendChild(folderRow);
 
     const members = groupedServers.get(folder.id) || [];
     if (!collapsed) {
+      if (isSystemSessionFolder) {
+        sessionShortcuts.forEach((shortcut) => renderSidebarSessionItem(shortcut, list, { indented: true }));
+      }
       members.forEach((server) => renderSidebarServerItem(server, list, rail, { indented: true }));
     }
   });
@@ -1708,7 +1905,7 @@ function hideFolderContextMenu() {
 function showFolderContextMenu(x, y, folderId) {
   const menu = document.getElementById('folder-context-menu');
   const folder = FOLDERS.find((item) => item.id === folderId);
-  if (!menu || !folder) return;
+  if (!menu || !folder || isSessionFolderId(folder.id)) return;
 
   hideSftpContextMenu();
   hideServerContextMenu();
@@ -1740,7 +1937,7 @@ function showFolderContextMenu(x, y, folderId) {
 async function runFolderContextAction(action, folderId) {
   hideFolderContextMenu();
   const folder = FOLDERS.find((item) => item.id === folderId);
-  if (!folder) return;
+  if (!folder || isSessionFolderId(folder.id)) return;
 
   if (action === 'edit_folder' || action === 'rename_folder') {
     const label = action === 'rename_folder' ? 'Rename folder' : 'Edit folder name';
@@ -2917,6 +3114,7 @@ function addTermTab(options = {}) {
     inputFlushTimer: null,
     pendingOutput: [],
     outputFlushTimer: null,
+    wslFallbackTimer: null,
   };
 
   if (remoteProtocol === 'ssh') {
@@ -3176,6 +3374,14 @@ function clearTerminalIoQueues(tab) {
   tab.pendingOutput = [];
 }
 
+function clearLocalWslFallbackTimer(tab) {
+  if (!tab) return;
+  if (tab.wslFallbackTimer !== null) {
+    clearTimeout(tab.wslFallbackTimer);
+    tab.wslFallbackTimer = null;
+  }
+}
+
 function remoteTabProtocol(tab) {
   return normalizeConnectionProtocol(tab?.remoteProtocol || 'ssh');
 }
@@ -3366,6 +3572,8 @@ async function initLocalTermSession(tid, shellType = 'powershell') {
   const t = termTabs[tid];
   if (!t) return;
   const localShellType = normalizeLocalShellType(shellType);
+  t.localShellType = localShellType;
+  clearLocalWslFallbackTimer(t);
 
   const container = document.getElementById(`xterm-${tid}`);
 
@@ -3443,15 +3651,46 @@ async function initLocalTermSession(tid, shellType = 'powershell') {
     updateTabStatus(tid, 'connected');
 
     t.unlisten = await listen(`local-data-${sessionId}`, (event) => {
-      queueTerminalOutput(t, String(event.payload || ''));
+      const payload = String(event.payload || '');
+      queueTerminalOutput(t, payload);
+
+      if (localShellType !== 'wsl') return;
+      if (t.wslFallbackTimer !== null) return;
+      if (!payload.toLowerCase().includes(WSL_MISSING_PROMPT_MARKER)) return;
+
+      t.wslFallbackTimer = setTimeout(async () => {
+        const active = termTabs[tid];
+        if (!active) return;
+        active.wslFallbackTimer = null;
+        if (active.mode !== 'local') return;
+        if (active.localShellType !== 'wsl') return;
+        if (!active.sessionId || active.sessionId !== sessionId) return;
+        if (active.connStatus !== 'connected') return;
+
+        queueTerminalOutput(
+          active,
+          '\r\n\x1b[38;2;245;166;35m\u2592 WSL install prompt timed out. Falling back to Bash\u2026\x1b[0m\r\n'
+        );
+        active.localShellType = 'bash';
+        try {
+          await termReconnect(tid);
+        } catch (err) {
+          queueTerminalOutput(
+            active,
+            `\r\n\x1b[38;2;255;59;92m\u2716 Bash fallback failed: ${String(err)}\x1b[0m\r\n`
+          );
+        }
+      }, WSL_FALLBACK_DELAY_MS);
     });
 
     t.unlistenEof = await listen(`local-eof-${sessionId}`, () => {
+      clearLocalWslFallbackTimer(t);
       term.writeln('\r\n\x1b[38;2;245;166;35m\u2592 Local shell closed.\x1b[0m');
       updateTabStatus(tid, 'disconnected');
     });
 
     t.unlistenClosed = await listen(`local-closed-${sessionId}`, () => {
+      clearLocalWslFallbackTimer(t);
       term.writeln('\r\n\x1b[38;2;255;59;92m\u2592 Local shell terminated.\x1b[0m');
       updateTabStatus(tid, 'disconnected');
     });
@@ -3527,6 +3766,7 @@ async function closeTab(e, tid) {
   if (e) e.stopPropagation();
   const t = termTabs[tid]; if (!t) return;
   const wasActive = activeTabId === tid;
+  clearLocalWslFallbackTimer(t);
   if (t.mode === 'local') flushTerminalInput(t, 'local_shell_write_text');
   else flushTerminalInput(t, remoteCommand(t, 'write_text'));
 
@@ -3563,6 +3803,7 @@ function termClear(tid) {
 
 async function termReconnect(tid) {
   const t = termTabs[tid]; if (!t) return;
+  clearLocalWslFallbackTimer(t);
   if (t.mode === 'local') flushTerminalInput(t, 'local_shell_write_text');
   else flushTerminalInput(t, remoteCommand(t, 'write_text'));
 
@@ -4480,6 +4721,882 @@ function toggleMaximize() {
 /* ══════════════════════════════════════════════════════════
    SETTINGS MODAL
 ══════════════════════════════════════════════════════════ */
+function createSessionModal() {
+  if (document.getElementById('session-modal')) return;
+  const modal = document.createElement('div');
+  modal.id = 'session-modal';
+  modal.innerHTML = `
+    <div class="session-overlay" id="session-overlay"></div>
+    <div class="session-panel" id="session-panel">
+      <div class="session-header">
+        <span class="session-title">+ Session Launcher</span>
+        <button class="session-close-btn" id="session-close-btn">×</button>
+      </div>
+      <div class="session-body">
+        <div class="session-hint" id="session-hint">Choose a session type, then provide connection details.</div>
+        <div class="session-row">
+          <label class="session-label">Session Type</label>
+          <select class="session-input" id="session-type">
+            <option value="local_shell">Local Shell</option>
+            <option value="ssh">SSH</option>
+            <option value="telnet">Telnet</option>
+            <option value="sftp">SFTP Browser</option>
+            <option value="rsh">RSH</option>
+            <option value="mosh">Mosh</option>
+            <option value="rdp">RDP</option>
+            <option value="vnc">VNC</option>
+            <option value="ftp">FTP</option>
+            <option value="serial">Serial</option>
+            <option value="wsl_shell">WSL</option>
+          </select>
+        </div>
+        <div class="session-row" id="session-local-shell-row" style="display:none">
+          <label class="session-label">Local Shell</label>
+          <select class="session-input" id="session-local-shell">
+            <option value="powershell">PowerShell</option>
+            <option value="cmd">CMD</option>
+            <option value="wsl">WSL</option>
+            <option value="bash">Bash</option>
+            <option value="zsh">Zsh</option>
+          </select>
+        </div>
+        <div class="session-row" id="session-server-row" style="display:none">
+          <label class="session-label" id="session-server-label">Server</label>
+          <select class="session-input" id="session-server"></select>
+        </div>
+        <div class="session-row" id="session-ssh-config-row" style="display:none">
+          <label class="session-label">SSH Source</label>
+          <select class="session-input" id="session-ssh-config-source">
+            <option value="saved">Saved SSH Profile</option>
+            <option value="new">New Server</option>
+          </select>
+        </div>
+        <div id="session-ssh-new-config" style="display:none">
+          <div class="session-row">
+            <label class="session-label">Remote Host</label>
+            <input class="session-input" id="session-ssh-host" placeholder="e.g. 203.0.113.10">
+          </div>
+          <div class="session-row session-row-inline">
+            <div class="session-col">
+              <label class="session-label">Username (optional)</label>
+              <input class="session-input" id="session-ssh-username" placeholder="Leave blank to ask in terminal">
+            </div>
+            <div class="session-col session-col-sm">
+              <label class="session-label">Port</label>
+              <input class="session-input" id="session-ssh-port" type="number" min="1" max="65535" value="22">
+            </div>
+          </div>
+        </div>
+        <div class="session-row" id="session-telnet-config-row" style="display:none">
+          <label class="session-label">Configuration</label>
+          <select class="session-input" id="session-telnet-config-source">
+            <option value="saved">Saved Telnet Profile</option>
+            <option value="new">New Configuration</option>
+          </select>
+        </div>
+        <div id="session-telnet-new-config" style="display:none">
+          <div class="session-row">
+            <label class="session-label">Remote Host</label>
+            <input class="session-input" id="session-telnet-host" placeholder="e.g. 192.0.2.15">
+          </div>
+          <div class="session-row session-row-inline">
+            <div class="session-col">
+              <label class="session-label">Username (optional)</label>
+              <input class="session-input" id="session-telnet-username" placeholder="Leave empty if not needed">
+            </div>
+            <div class="session-col session-col-sm">
+              <label class="session-label">Port</label>
+              <input class="session-input" id="session-telnet-port" type="number" min="1" max="65535" value="23">
+            </div>
+          </div>
+        </div>
+        <div class="session-row" id="session-sftp-credential-row" style="display:none">
+          <label class="session-label">Credentials</label>
+          <select class="session-input" id="session-sftp-credential-source">
+            <option value="saved">Saved SSH Profile</option>
+            <option value="new">New Credentials</option>
+          </select>
+        </div>
+        <div id="session-sftp-new-credentials" style="display:none">
+          <div class="session-row">
+            <label class="session-label">Remote Host</label>
+            <input class="session-input" id="session-sftp-host" placeholder="e.g. 203.0.113.10">
+          </div>
+          <div class="session-row session-row-inline">
+            <div class="session-col">
+              <label class="session-label">Username</label>
+              <input class="session-input" id="session-sftp-username" placeholder="e.g. root">
+            </div>
+            <div class="session-col session-col-sm">
+              <label class="session-label">Port</label>
+              <input class="session-input" id="session-sftp-port" type="number" min="1" max="65535" value="22">
+            </div>
+          </div>
+          <div class="session-row">
+            <label class="session-label">Authentication</label>
+            <select class="session-input" id="session-sftp-auth-method">
+              <option value="Password">Password</option>
+              <option value="Key">SSH Key</option>
+            </select>
+          </div>
+          <div class="session-row" id="session-sftp-password-row">
+            <label class="session-label">Password</label>
+            <input class="session-input" id="session-sftp-password" type="password" placeholder="Remote account password">
+          </div>
+          <div class="session-row" id="session-sftp-key-row" style="display:none">
+            <label class="session-label">SSH Key Path</label>
+            <div class="session-inline">
+              <input class="session-input" id="session-sftp-key-path" placeholder="~/.ssh/id_ed25519">
+              <button class="sf-browse-btn" id="session-sftp-key-browse-btn">Browse</button>
+            </div>
+          </div>
+          <div class="session-row" id="session-sftp-passphrase-row" style="display:none">
+            <label class="session-label">Key Passphrase (optional)</label>
+            <input class="session-input" id="session-sftp-passphrase" type="password" placeholder="Leave empty if none">
+          </div>
+        </div>
+        <div class="session-row" id="session-username-row" style="display:none">
+          <label class="session-label">Username Override (optional)</label>
+          <input class="session-input" id="session-username" placeholder="Leave empty to use saved username">
+        </div>
+        <div class="session-row" id="session-force-username-row" style="display:none">
+          <label class="session-check">
+            <input type="checkbox" id="session-force-username">
+            <span>Prompt for username on connect</span>
+          </label>
+        </div>
+        <div id="session-external-config" style="display:none">
+          <div class="session-row" id="session-external-host-row">
+            <label class="session-label" id="session-external-host-label">Remote Host</label>
+            <input class="session-input" id="session-external-host" placeholder="e.g. 192.0.2.25">
+          </div>
+          <div class="session-row session-row-inline" id="session-external-port-row">
+            <div class="session-col session-col-sm">
+              <label class="session-label" id="session-external-port-label">Port</label>
+              <input class="session-input" id="session-external-port" type="number" min="1" max="65535" value="22">
+            </div>
+            <div class="session-col" id="session-external-username-row" style="display:none">
+              <label class="session-label" id="session-external-username-label">Username (optional)</label>
+              <input class="session-input" id="session-external-username" placeholder="Leave empty if not needed">
+            </div>
+          </div>
+          <div class="session-row" id="session-external-password-row" style="display:none">
+            <label class="session-label" id="session-external-password-label">Password (optional)</label>
+            <input class="session-input" id="session-external-password" type="password" placeholder="Optional">
+          </div>
+          <div class="session-row" id="session-external-serial-port-row" style="display:none">
+            <label class="session-label">Serial Port</label>
+            <input class="session-input" id="session-external-serial-port" placeholder="e.g. COM3 or /dev/ttyUSB0">
+          </div>
+          <div class="session-row" id="session-external-baud-row" style="display:none">
+            <label class="session-label">Baud Rate</label>
+            <input class="session-input" id="session-external-baud" type="number" min="50" max="921600" value="115200">
+          </div>
+          <div class="session-row">
+            <div class="session-hint">These launch via local tools (PowerShell + installed client binaries).</div>
+          </div>
+        </div>
+      </div>
+      <div class="session-error" id="session-error" style="display:none"></div>
+      <div class="session-actions">
+        <button class="session-cancel-btn" id="session-cancel-btn">Cancel</button>
+        <button class="session-start-btn" id="session-start-btn">Start Session</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+
+  document.getElementById('session-overlay').addEventListener('click', closeSessionModal);
+  document.getElementById('session-close-btn').addEventListener('click', closeSessionModal);
+  document.getElementById('session-cancel-btn').addEventListener('click', closeSessionModal);
+  document.getElementById('session-type').addEventListener('change', renderSessionModalFields);
+  document.getElementById('session-ssh-config-source').addEventListener('change', renderSessionModalFields);
+  document.getElementById('session-telnet-config-source').addEventListener('change', renderSessionModalFields);
+  document.getElementById('session-sftp-credential-source').addEventListener('change', renderSessionModalFields);
+  document.getElementById('session-sftp-auth-method').addEventListener('change', renderSessionModalFields);
+  document.getElementById('session-sftp-key-browse-btn').addEventListener('click', browseSessionSftpKeyFile);
+  document.getElementById('session-start-btn').addEventListener('click', () => {
+    void startSessionFromModal();
+  });
+}
+
+async function browseSessionSftpKeyFile() {
+  try {
+    const selected = await open({
+      multiple: false,
+      title: 'Select SSH Key',
+    });
+    if (selected) {
+      const keyPathEl = document.getElementById('session-sftp-key-path');
+      if (keyPathEl) keyPathEl.value = String(selected);
+    }
+  } catch (e) {
+    console.error('Session key picker error:', e);
+  }
+}
+
+function isExternalLauncherSession(type) {
+  return type === 'rsh'
+    || type === 'mosh'
+    || type === 'rdp'
+    || type === 'vnc'
+    || type === 'ftp'
+    || type === 'serial';
+}
+
+function psQuote(value) {
+  return `'${String(value || '').replace(/'/g, "''")}'`;
+}
+
+async function waitForLocalSessionId(tabId, timeoutMs = 20000) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const tab = termTabs[tabId];
+    if (!tab) break;
+    if (tab.sessionId) return tab.sessionId;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return null;
+}
+
+async function launchExternalCommandSession(commandText) {
+  const tabId = addLocalTermTab('powershell');
+  if (!tabId) throw new Error('Failed to open launcher terminal.');
+  const sessionId = await waitForLocalSessionId(tabId);
+  if (!sessionId) throw new Error('Launcher terminal did not become ready in time.');
+  await invoke('local_shell_write_text', { sessionId, data: `${commandText}\r` });
+}
+
+function buildExternalSessionCommand(type, options) {
+  const host = String(options?.host || '').trim();
+  const username = String(options?.username || '').trim();
+  const password = String(options?.password || '');
+  const port = Number(options?.port || 0);
+  const serialPort = String(options?.serialPort || '').trim();
+  const baud = Number(options?.baud || 0);
+
+  if (type === 'rdp') {
+    const endpoint = port && port !== 3389 ? `${host}:${port}` : host;
+    return `Start-Process -FilePath 'mstsc.exe' -ArgumentList '/v:${endpoint}'`;
+  }
+
+  if (type === 'vnc') {
+    const endpoint = `${host}:${port || 5900}`;
+    return [
+      '$vnc = Get-Command vncviewer -ErrorAction SilentlyContinue',
+      'if ($vnc) {',
+      `  & $vnc.Source ${psQuote(endpoint)}`,
+      '} else {',
+      `  Write-Host ${psQuote('[nodegrid] vncviewer not found in PATH. Install VNC Viewer and retry.')}`,
+      '}',
+    ].join('\n');
+  }
+
+  if (type === 'ftp') {
+    const effectivePort = port || 21;
+    const authPrefix = username
+      ? `${encodeURIComponent(username)}${password ? `:${encodeURIComponent(password)}` : ''}@`
+      : '';
+    const url = `ftp://${authPrefix}${host}:${effectivePort}/`;
+    return `Start-Process -FilePath 'explorer.exe' -ArgumentList ${psQuote(url)}`;
+  }
+
+  if (type === 'serial') {
+    const endpoint = serialPort;
+    const serialConfig = `${baud || 115200},8,n,1,N`;
+    return [
+      '$putty = Get-Command putty -ErrorAction SilentlyContinue',
+      'if ($putty) {',
+      `  & $putty.Source -serial ${psQuote(endpoint)} -sercfg ${psQuote(serialConfig)}`,
+      '} else {',
+      `  Write-Host ${psQuote('[nodegrid] PuTTY not found in PATH. Install PuTTY and retry serial launch.')}`,
+      '}',
+    ].join('\n');
+  }
+
+  if (type === 'rsh') {
+    const args = [];
+    if (username) args.push(`-l ${psQuote(username)}`);
+    args.push(psQuote(host));
+    return [
+      '$rsh = Get-Command rsh -ErrorAction SilentlyContinue',
+      'if ($rsh) {',
+      `  & $rsh.Source ${args.join(' ')}`,
+      '} else {',
+      `  Write-Host ${psQuote('[nodegrid] rsh not found in PATH. Install an rsh client and retry.')}`,
+      '}',
+    ].join('\n');
+  }
+
+  if (type === 'mosh') {
+    const effectivePort = port || 22;
+    const target = username ? `${username}@${host}` : host;
+    return [
+      '$mosh = Get-Command mosh -ErrorAction SilentlyContinue',
+      'if ($mosh) {',
+      `  & $mosh.Source ${psQuote(target)} --ssh=${psQuote(`ssh -p ${effectivePort}`)}`,
+      '} else {',
+      `  Write-Host ${psQuote('[nodegrid] mosh not found in PATH. Install mosh and retry.')}`,
+      '}',
+    ].join('\n');
+  }
+
+  return '';
+}
+
+function sessionServersForType(type) {
+  if (type === 'ssh' || type === 'sftp') {
+    return SRV.filter((s) => serverProtocol(s) === 'ssh');
+  }
+  if (type === 'telnet') {
+    return SRV.filter((s) => serverProtocol(s) === 'telnet');
+  }
+  return [];
+}
+
+function sessionHintForType(type) {
+  if (type === 'ssh') return 'Launch SSH from a saved profile or create a new server with host/port.';
+  if (type === 'telnet') return 'Launch Telnet using a saved profile or enter new connection details.';
+  if (type === 'sftp') return 'Open SFTP using a saved SSH profile or enter new credentials.';
+  if (type === 'wsl_shell') return 'Start a local WSL shell tab (falls back automatically when WSL is unavailable).';
+  if (type === 'rdp') return 'Launch Windows Remote Desktop (mstsc) to the target host.';
+  if (type === 'vnc') return 'Launch VNC Viewer (vncviewer) for the target endpoint.';
+  if (type === 'ftp') return 'Open FTP target in system explorer/browser.';
+  if (type === 'serial') return 'Launch serial connection via PuTTY (putty).';
+  if (type === 'rsh') return 'Launch RSH from local shell (requires rsh client in PATH).';
+  if (type === 'mosh') return 'Launch MOSH from local shell (requires mosh client in PATH).';
+  return 'Start a local terminal session on this machine.';
+}
+
+function renderSessionModalFields() {
+  const type = String(document.getElementById('session-type')?.value || 'local_shell');
+  const localRow = document.getElementById('session-local-shell-row');
+  const serverRow = document.getElementById('session-server-row');
+  const serverLabel = document.getElementById('session-server-label');
+  const serverSelect = document.getElementById('session-server');
+  const sshConfigRow = document.getElementById('session-ssh-config-row');
+  const sshConfigSource = document.getElementById('session-ssh-config-source');
+  const sshNewConfig = document.getElementById('session-ssh-new-config');
+  const telnetConfigRow = document.getElementById('session-telnet-config-row');
+  const telnetConfigSource = document.getElementById('session-telnet-config-source');
+  const telnetNewConfig = document.getElementById('session-telnet-new-config');
+  const sftpCredentialRow = document.getElementById('session-sftp-credential-row');
+  const sftpCredentialSource = document.getElementById('session-sftp-credential-source');
+  const sftpNewCredentials = document.getElementById('session-sftp-new-credentials');
+  const sftpAuthMethodEl = document.getElementById('session-sftp-auth-method');
+  const sftpPasswordRow = document.getElementById('session-sftp-password-row');
+  const sftpKeyRow = document.getElementById('session-sftp-key-row');
+  const sftpPassphraseRow = document.getElementById('session-sftp-passphrase-row');
+  const usernameRow = document.getElementById('session-username-row');
+  const forceRow = document.getElementById('session-force-username-row');
+  const externalWrap = document.getElementById('session-external-config');
+  const externalHostRow = document.getElementById('session-external-host-row');
+  const externalHostLabel = document.getElementById('session-external-host-label');
+  const externalHostInput = document.getElementById('session-external-host');
+  const externalPortRow = document.getElementById('session-external-port-row');
+  const externalPortLabel = document.getElementById('session-external-port-label');
+  const externalPortInput = document.getElementById('session-external-port');
+  const externalUsernameRow = document.getElementById('session-external-username-row');
+  const externalPasswordRow = document.getElementById('session-external-password-row');
+  const externalPasswordLabel = document.getElementById('session-external-password-label');
+  const externalSerialPortRow = document.getElementById('session-external-serial-port-row');
+  const externalBaudRow = document.getElementById('session-external-baud-row');
+  const hint = document.getElementById('session-hint');
+  const errorEl = document.getElementById('session-error');
+
+  if (hint) hint.textContent = sessionHintForType(type);
+  if (errorEl) {
+    errorEl.style.display = 'none';
+    errorEl.textContent = '';
+  }
+
+  const isLocal = type === 'local_shell';
+  const isSsh = type === 'ssh';
+  const sshSource = String(sshConfigSource?.value || 'saved');
+  const isSshNew = isSsh && sshSource === 'new';
+  const isTelnet = type === 'telnet';
+  const isSftp = type === 'sftp';
+  const isWsl = type === 'wsl_shell';
+  const isExternal = isExternalLauncherSession(type);
+  const telnetSource = String(telnetConfigSource?.value || 'saved');
+  const isTelnetNew = isTelnet && telnetSource === 'new';
+  const sftpSource = String(sftpCredentialSource?.value || 'saved');
+  const isSftpNew = isSftp && sftpSource === 'new';
+  const needsServer = !isLocal && !isWsl && !isExternal && !isSshNew && !isTelnetNew && !isSftpNew;
+  const sftpAuthMethod = String(sftpAuthMethodEl?.value || 'Password');
+  const useSftpKey = isSftpNew && sftpAuthMethod === 'Key';
+
+  if (localRow) localRow.style.display = isLocal ? '' : 'none';
+  if (sshConfigRow) sshConfigRow.style.display = isSsh ? '' : 'none';
+  if (sshNewConfig) sshNewConfig.style.display = isSshNew ? '' : 'none';
+  if (telnetConfigRow) telnetConfigRow.style.display = isTelnet ? '' : 'none';
+  if (telnetNewConfig) telnetNewConfig.style.display = isTelnetNew ? '' : 'none';
+  if (sftpCredentialRow) sftpCredentialRow.style.display = isSftp ? '' : 'none';
+  if (sftpNewCredentials) sftpNewCredentials.style.display = isSftpNew ? '' : 'none';
+  if (sftpPasswordRow) sftpPasswordRow.style.display = isSftpNew && !useSftpKey ? '' : 'none';
+  if (sftpKeyRow) sftpKeyRow.style.display = useSftpKey ? '' : 'none';
+  if (sftpPassphraseRow) sftpPassphraseRow.style.display = useSftpKey ? '' : 'none';
+  if (serverRow) serverRow.style.display = needsServer ? '' : 'none';
+  if (usernameRow) usernameRow.style.display = isSsh && !isSshNew ? '' : 'none';
+  if (forceRow) forceRow.style.display = isSsh && !isSshNew ? '' : 'none';
+  if (externalWrap) externalWrap.style.display = isExternal ? '' : 'none';
+  if (externalHostRow) externalHostRow.style.display = type === 'serial' ? 'none' : '';
+  if (externalPortRow) externalPortRow.style.display = (type === 'serial' || type === 'rsh') ? 'none' : '';
+  if (externalUsernameRow) {
+    const needsUser = type === 'rsh' || type === 'mosh' || type === 'ftp';
+    externalUsernameRow.style.display = needsUser ? '' : 'none';
+  }
+  if (externalPasswordRow) externalPasswordRow.style.display = type === 'ftp' ? '' : 'none';
+  if (externalSerialPortRow) externalSerialPortRow.style.display = type === 'serial' ? '' : 'none';
+  if (externalBaudRow) externalBaudRow.style.display = type === 'serial' ? '' : 'none';
+
+  if (isExternal) {
+    if (externalHostLabel) externalHostLabel.textContent = type === 'ftp' ? 'FTP Host' : 'Remote Host';
+    if (externalPortLabel) {
+      externalPortLabel.textContent = type === 'mosh'
+        ? 'SSH Port'
+        : type === 'rdp'
+          ? 'RDP Port'
+          : type === 'vnc'
+            ? 'VNC Port'
+            : type === 'ftp'
+              ? 'FTP Port'
+              : 'Port';
+    }
+    if (externalPortInput) {
+      const defaults = { mosh: '22', rdp: '3389', vnc: '5900', ftp: '21' };
+      if (!String(externalPortInput.value || '').trim()) externalPortInput.value = defaults[type] || '';
+    }
+    if (externalHostInput) {
+      const placeholders = {
+        rsh: 'e.g. 192.0.2.25',
+        mosh: 'e.g. 203.0.113.8',
+        rdp: 'e.g. windows-server.local',
+        vnc: 'e.g. 192.0.2.50',
+        ftp: 'e.g. files.example.com',
+      };
+      externalHostInput.placeholder = placeholders[type] || 'e.g. 192.0.2.25';
+    }
+    if (externalPasswordLabel) externalPasswordLabel.textContent = 'Password (optional, for FTP URL auth)';
+  }
+
+  if (!needsServer || !serverSelect) return;
+
+  if (serverLabel) {
+    serverLabel.textContent = type === 'telnet' ? 'Telnet Server' : type === 'sftp' ? 'SFTP Server (SSH)' : 'SSH Server';
+  }
+
+  const servers = sessionServersForType(type);
+  const preferred = (selId && servers.some((s) => s.id === selId))
+    ? selId
+    : (servers[0]?.id || '');
+
+  if (!servers.length) {
+    const msg = type === 'telnet' ? 'No Telnet servers configured' : 'No SSH servers configured';
+    serverSelect.innerHTML = `<option value="">${msg}</option>`;
+    serverSelect.value = '';
+    return;
+  }
+
+  serverSelect.innerHTML = servers
+    .map((s) => `<option value="${s.id}">${escapeHtml(s.name)} (${escapeHtml(s.host)}:${s.port})</option>`)
+    .join('');
+  serverSelect.value = preferred;
+}
+
+function openSessionModal(initialType = 'local_shell') {
+  createSessionModal();
+  const modal = document.getElementById('session-modal');
+  if (!modal) return;
+
+  const typeEl = document.getElementById('session-type');
+  const localShellEl = document.getElementById('session-local-shell');
+  const usernameEl = document.getElementById('session-username');
+  const forceEl = document.getElementById('session-force-username');
+  const sshConfigSourceEl = document.getElementById('session-ssh-config-source');
+  const sshHostEl = document.getElementById('session-ssh-host');
+  const sshUsernameEl = document.getElementById('session-ssh-username');
+  const sshPortEl = document.getElementById('session-ssh-port');
+  const telnetConfigSourceEl = document.getElementById('session-telnet-config-source');
+  const telnetHostEl = document.getElementById('session-telnet-host');
+  const telnetUsernameEl = document.getElementById('session-telnet-username');
+  const telnetPortEl = document.getElementById('session-telnet-port');
+  const externalHostEl = document.getElementById('session-external-host');
+  const externalPortEl = document.getElementById('session-external-port');
+  const externalUsernameEl = document.getElementById('session-external-username');
+  const externalPasswordEl = document.getElementById('session-external-password');
+  const externalSerialPortEl = document.getElementById('session-external-serial-port');
+  const externalBaudEl = document.getElementById('session-external-baud');
+  const sftpCredentialSourceEl = document.getElementById('session-sftp-credential-source');
+  const sftpHostEl = document.getElementById('session-sftp-host');
+  const sftpUsernameEl = document.getElementById('session-sftp-username');
+  const sftpPortEl = document.getElementById('session-sftp-port');
+  const sftpAuthEl = document.getElementById('session-sftp-auth-method');
+  const sftpPasswordEl = document.getElementById('session-sftp-password');
+  const sftpKeyPathEl = document.getElementById('session-sftp-key-path');
+  const sftpPassphraseEl = document.getElementById('session-sftp-passphrase');
+  const errorEl = document.getElementById('session-error');
+
+  if (typeEl) typeEl.value = initialType;
+  if (localShellEl) localShellEl.value = 'powershell';
+  if (usernameEl) usernameEl.value = '';
+  if (forceEl) forceEl.checked = false;
+  if (sshConfigSourceEl) sshConfigSourceEl.value = 'saved';
+  if (sshHostEl) sshHostEl.value = '';
+  if (sshUsernameEl) sshUsernameEl.value = '';
+  if (sshPortEl) sshPortEl.value = '22';
+  if (telnetConfigSourceEl) telnetConfigSourceEl.value = 'saved';
+  if (telnetHostEl) telnetHostEl.value = '';
+  if (telnetUsernameEl) telnetUsernameEl.value = '';
+  if (telnetPortEl) telnetPortEl.value = '23';
+  if (externalHostEl) externalHostEl.value = '';
+  if (externalPortEl) externalPortEl.value = '';
+  if (externalUsernameEl) externalUsernameEl.value = '';
+  if (externalPasswordEl) externalPasswordEl.value = '';
+  if (externalSerialPortEl) externalSerialPortEl.value = '';
+  if (externalBaudEl) externalBaudEl.value = '115200';
+  if (sftpCredentialSourceEl) sftpCredentialSourceEl.value = 'saved';
+  if (sftpHostEl) sftpHostEl.value = '';
+  if (sftpUsernameEl) sftpUsernameEl.value = '';
+  if (sftpPortEl) sftpPortEl.value = '22';
+  if (sftpAuthEl) sftpAuthEl.value = 'Password';
+  if (sftpPasswordEl) sftpPasswordEl.value = '';
+  if (sftpKeyPathEl) sftpKeyPathEl.value = '';
+  if (sftpPassphraseEl) sftpPassphraseEl.value = '';
+  if (errorEl) {
+    errorEl.style.display = 'none';
+    errorEl.textContent = '';
+  }
+
+  renderSessionModalFields();
+  modal.style.display = 'block';
+}
+
+function closeSessionModal() {
+  const modal = document.getElementById('session-modal');
+  if (!modal) return;
+  modal.style.display = 'none';
+}
+
+async function startSessionFromModal() {
+  const type = String(document.getElementById('session-type')?.value || 'local_shell');
+  const serverId = String(document.getElementById('session-server')?.value || '').trim();
+  const username = String(document.getElementById('session-username')?.value || '').trim();
+  const forcePrompt = Boolean(document.getElementById('session-force-username')?.checked);
+  const sshConfigSource = String(document.getElementById('session-ssh-config-source')?.value || 'saved');
+  const sshHost = String(document.getElementById('session-ssh-host')?.value || '').trim();
+  const sshUsername = String(document.getElementById('session-ssh-username')?.value || '').trim();
+  const sshPortRaw = String(document.getElementById('session-ssh-port')?.value || '22').trim();
+  const telnetConfigSource = String(document.getElementById('session-telnet-config-source')?.value || 'saved');
+  const telnetHost = String(document.getElementById('session-telnet-host')?.value || '').trim();
+  const telnetUsername = String(document.getElementById('session-telnet-username')?.value || '').trim();
+  const telnetPortRaw = String(document.getElementById('session-telnet-port')?.value || '23').trim();
+  const externalHost = String(document.getElementById('session-external-host')?.value || '').trim();
+  const externalPortRaw = String(document.getElementById('session-external-port')?.value || '').trim();
+  const externalUsername = String(document.getElementById('session-external-username')?.value || '').trim();
+  const externalPassword = String(document.getElementById('session-external-password')?.value || '');
+  const externalSerialPort = String(document.getElementById('session-external-serial-port')?.value || '').trim();
+  const externalBaudRaw = String(document.getElementById('session-external-baud')?.value || '115200').trim();
+  const sftpCredentialSource = String(document.getElementById('session-sftp-credential-source')?.value || 'saved');
+  const sftpHost = String(document.getElementById('session-sftp-host')?.value || '').trim();
+  const sftpUsername = String(document.getElementById('session-sftp-username')?.value || '').trim();
+  const sftpPortRaw = String(document.getElementById('session-sftp-port')?.value || '22').trim();
+  const sftpAuthMethod = String(document.getElementById('session-sftp-auth-method')?.value || 'Password');
+  const sftpPassword = String(document.getElementById('session-sftp-password')?.value || '');
+  const sftpKeyPath = String(document.getElementById('session-sftp-key-path')?.value || '').trim();
+  const sftpPassphrase = String(document.getElementById('session-sftp-passphrase')?.value || '');
+  const localShellType = normalizeLocalShellType(document.getElementById('session-local-shell')?.value || 'powershell');
+  const errorEl = document.getElementById('session-error');
+  const fail = (message) => {
+    if (!errorEl) return;
+    errorEl.textContent = message;
+    errorEl.style.display = 'block';
+  };
+
+  if (type === 'local_shell') {
+    addLocalTermTab(localShellType);
+    addSessionShortcut({
+      type: 'local_shell',
+      name: `Local ${localShellLabel(localShellType)}`,
+      payload: { shellType: localShellType },
+    });
+    closeSessionModal();
+    return;
+  }
+
+  if (type === 'wsl_shell') {
+    addLocalTermTab('wsl');
+    addSessionShortcut({
+      type: 'wsl_shell',
+      name: 'Local WSL',
+      payload: {},
+    });
+    closeSessionModal();
+    return;
+  }
+
+  if (type === 'ssh' && sshConfigSource === 'new') {
+    const parsedPort = Number.parseInt(sshPortRaw || '22', 10);
+    if (!sshHost) {
+      fail('Remote host is required.');
+      return;
+    }
+    if (!Number.isInteger(parsedPort) || parsedPort < 1 || parsedPort > 65535) {
+      fail('Port must be a valid number between 1 and 65535.');
+      return;
+    }
+
+    const serverIdNew = crypto.randomUUID();
+    const displayUser = sshUsername ? `${sshUsername}@` : '';
+    const server = {
+      id: serverIdNew,
+      name: `SSH ${displayUser}${sshHost}:${parsedPort}`,
+      icon: 'server',
+      host: sshHost,
+      port: parsedPort,
+      username: sshUsername,
+      protocol: 'ssh',
+      auth_method: { type: 'Password', password: '' },
+      location: '',
+      lat: 0,
+      lng: 0,
+      folder_id: SESSION_FOLDER_ID,
+    };
+
+    try {
+      await invoke('save_server', { server });
+      await loadServers();
+      selectSrv(serverIdNew);
+      addTermTab({
+        serverId: serverIdNew,
+        usernameOverride: sshUsername || null,
+        forceUsernamePrompt: false,
+      });
+      closeSessionModal();
+      return;
+    } catch (e) {
+      fail(`Failed to create SSH server: ${e}`);
+      return;
+    }
+  }
+
+  if (isExternalLauncherSession(type)) {
+    if (type === 'serial') {
+      const baud = Number.parseInt(externalBaudRaw || '115200', 10);
+      if (!externalSerialPort) {
+        fail('Serial port is required (e.g. COM3).');
+        return;
+      }
+      if (!Number.isInteger(baud) || baud < 50 || baud > 921600) {
+        fail('Baud rate must be a valid number between 50 and 921600.');
+        return;
+      }
+      try {
+        const command = buildExternalSessionCommand(type, {
+          serialPort: externalSerialPort,
+          baud,
+        });
+        await launchExternalCommandSession(command);
+        addSessionShortcut({
+          type,
+          name: `Serial ${externalSerialPort}`,
+          payload: { serialPort: externalSerialPort, baud },
+        });
+        closeSessionModal();
+      } catch (e) {
+        fail(`Failed to launch serial session: ${e}`);
+      }
+      return;
+    }
+
+    const port = Number.parseInt(externalPortRaw || '0', 10);
+    if (!externalHost) {
+      fail('Remote host is required.');
+      return;
+    }
+    if (type !== 'rsh' && (!Number.isInteger(port) || port < 1 || port > 65535)) {
+      fail('Port must be a valid number between 1 and 65535.');
+      return;
+    }
+    try {
+      const command = buildExternalSessionCommand(type, {
+        host: externalHost,
+        port: type === 'rsh' ? null : port,
+        username: externalUsername,
+        password: externalPassword,
+      });
+      await launchExternalCommandSession(command);
+      const shortcutPort = type === 'rsh' ? null : port;
+      const endpoint = shortcutPort ? `${externalHost}:${shortcutPort}` : externalHost;
+      addSessionShortcut({
+        type,
+        name: `${type.toUpperCase()} ${endpoint}`,
+        payload: {
+          host: externalHost,
+          port: shortcutPort,
+          username: externalUsername,
+          password: externalPassword,
+        },
+      });
+      closeSessionModal();
+    } catch (e) {
+      fail(`Failed to launch ${type.toUpperCase()} session: ${e}`);
+    }
+    return;
+  }
+
+  if (type === 'telnet' && telnetConfigSource === 'new') {
+    const parsedPort = Number.parseInt(telnetPortRaw || '23', 10);
+    if (!telnetHost) {
+      fail('Remote host is required.');
+      return;
+    }
+    if (!Number.isInteger(parsedPort) || parsedPort < 1 || parsedPort > 65535) {
+      fail('Port must be a valid number between 1 and 65535.');
+      return;
+    }
+
+    const serverIdNew = crypto.randomUUID();
+    const displayUser = telnetUsername ? `${telnetUsername}@` : '';
+    const server = {
+      id: serverIdNew,
+      name: `TELNET ${displayUser}${telnetHost}:${parsedPort}`,
+      icon: 'terminal',
+      host: telnetHost,
+      port: parsedPort,
+      username: telnetUsername,
+      protocol: 'telnet',
+      auth_method: { type: 'Agent' },
+      location: '',
+      lat: 0,
+      lng: 0,
+      folder_id: SESSION_FOLDER_ID,
+    };
+
+    try {
+      await invoke('save_server', { server });
+      await loadServers();
+      selectSrv(serverIdNew);
+      addTermTab({ serverId: serverIdNew });
+      closeSessionModal();
+      return;
+    } catch (e) {
+      fail(`Failed to create Telnet profile: ${e}`);
+      return;
+    }
+  }
+
+  if (type === 'sftp' && sftpCredentialSource === 'new') {
+    const parsedPort = Number.parseInt(sftpPortRaw || '22', 10);
+    if (!sftpHost) {
+      fail('Remote host is required.');
+      return;
+    }
+    if (!sftpUsername) {
+      fail('Username is required.');
+      return;
+    }
+    if (!Number.isInteger(parsedPort) || parsedPort < 1 || parsedPort > 65535) {
+      fail('Port must be a valid number between 1 and 65535.');
+      return;
+    }
+
+    let auth_method;
+    if (sftpAuthMethod === 'Key') {
+      if (!sftpKeyPath) {
+        fail('SSH key path is required when using key authentication.');
+        return;
+      }
+      auth_method = { type: 'Key', key_path: sftpKeyPath, passphrase: sftpPassphrase || null };
+    } else {
+      if (!sftpPassword) {
+        fail('Password is required when using password authentication.');
+        return;
+      }
+      auth_method = { type: 'Password', password: sftpPassword };
+    }
+
+    const serverIdNew = crypto.randomUUID();
+    const displayUser = sftpUsername ? `${sftpUsername}@` : '';
+    const server = {
+      id: serverIdNew,
+      name: `SFTP ${displayUser}${sftpHost}:${parsedPort}`,
+      icon: 'server',
+      host: sftpHost,
+      port: parsedPort,
+      username: sftpUsername,
+      protocol: 'ssh',
+      auth_method,
+      location: '',
+      lat: 0,
+      lng: 0,
+      folder_id: SESSION_FOLDER_ID,
+    };
+
+    try {
+      await invoke('save_server', { server });
+      await loadServers();
+      selectSrv(serverIdNew);
+      openSftpBrowserTab(serverIdNew);
+      setActiveTab('sftp');
+      closeSessionModal();
+      return;
+    } catch (e) {
+      fail(`Failed to create SFTP credential profile: ${e}`);
+      return;
+    }
+  }
+
+  if (!serverId) {
+    fail('Select a server profile for this session type.');
+    return;
+  }
+  const server = SRV.find((s) => s.id === serverId);
+  if (!server) {
+    fail('Selected server no longer exists. Reload servers and try again.');
+    return;
+  }
+
+  if (type === 'ssh') {
+    if (serverProtocol(server) !== 'ssh') {
+      fail('Selected profile is not configured for SSH.');
+      return;
+    }
+    selectSrv(serverId);
+    addTermTab({
+      serverId,
+      usernameOverride: username || null,
+      forceUsernamePrompt: forcePrompt,
+    });
+    closeSessionModal();
+    return;
+  }
+
+  if (type === 'telnet') {
+    if (serverProtocol(server) !== 'telnet') {
+      fail('Selected profile is not configured for Telnet.');
+      return;
+    }
+    selectSrv(serverId);
+    addTermTab({ serverId });
+    closeSessionModal();
+    return;
+  }
+
+  if (type === 'sftp') {
+    if (serverProtocol(server) !== 'ssh') {
+      fail('SFTP requires an SSH server profile.');
+      return;
+    }
+    selectSrv(serverId);
+    openSftpBrowserTab(serverId);
+    setActiveTab('sftp');
+    closeSessionModal();
+    return;
+  }
+
+  fail('Unsupported session type.');
+}
+
 function createSettingsModal() {
   const modal = document.createElement('div');
   modal.id = 'settings-modal';
@@ -4862,14 +5979,7 @@ async function loadServers() {
       invoke('get_servers'),
       invoke('get_folders').catch(() => []),
     ]);
-    FOLDERS = Array.isArray(folders)
-      ? folders
-        .map((folder) => ({
-          id: String(folder?.id || '').trim(),
-          name: normalizeFolderName(folder?.name || ''),
-        }))
-        .filter((folder) => folder.id && folder.name)
-      : [];
+    FOLDERS = withSystemFolders(folders);
     collapsedFolderIds = new Set(
       Array.from(collapsedFolderIds).filter((id) => id === UNGROUPED_COLLAPSE_ID || FOLDERS.some((folder) => folder.id === id))
     );
@@ -4913,7 +6023,7 @@ async function loadServers() {
     }
   } catch (e) {
     console.error('Failed to load servers:', e);
-    FOLDERS = [];
+    FOLDERS = withSystemFolders([]);
     SRV = [];
     selId = null;
   }
@@ -5007,6 +6117,7 @@ function switchToSftp() { setActiveTab('sftp'); }
 
 // Create settings modal DOM
 createSettingsModal();
+createSessionModal();
 
 // Wire up all UI buttons via addEventListener (CSP-safe, no inline handlers)
 document.getElementById('menu-btn').addEventListener('click', () => toggleSidebar());
@@ -5015,6 +6126,9 @@ document.getElementById('sb-add-folder-btn').addEventListener('click', () => {
   void createFolderFromSidebar();
 });
 document.getElementById('sb-add-btn').addEventListener('click', () => { openSettings(); showServerForm(null); });
+document.getElementById('sb-add-session-btn').addEventListener('click', () => {
+  openSessionModal();
+});
 document.getElementById('sb-gear-btn').addEventListener('click', () => openSettings());
 document.getElementById('sb-toggle-btn').addEventListener('click', () => toggleSidebar_collapse());
 document.getElementById('sidebar-overlay').addEventListener('click', () => toggleSidebar(false));
@@ -5099,6 +6213,9 @@ document.getElementById('dash-launch-bash-btn').addEventListener('click', () => 
 document.getElementById('dash-launch-zsh-btn').addEventListener('click', () => {
   void startLocalTerminalFromDashboard('zsh');
 });
+document.getElementById('dash-launch-wsl-btn').addEventListener('click', () => {
+  void startLocalTerminalFromDashboard('wsl');
+});
 document.getElementById('dash-cancel-terminal-picker-btn').addEventListener('click', () => {
   setTerminalPickerVisible(false);
 });
@@ -5134,6 +6251,7 @@ document.addEventListener('keydown', (ev) => {
     hideSftpContextMenu();
     hideServerContextMenu();
     hideFolderContextMenu();
+    closeSessionModal();
   }
 });
 

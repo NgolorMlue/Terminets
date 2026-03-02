@@ -1207,6 +1207,21 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
   transition:all .15s;line-height:1;white-space:nowrap;
 }
 .sb-add-btn:hover{color:#fff;border-color:var(--accent2);background:rgba(0,255,170,.18);box-shadow:0 0 10px rgba(0,255,170,.2)}
+.sb-session-row{
+  margin:0 8px 8px;
+  padding:8px 10px;
+  border:1px solid var(--border);
+  border-radius:7px;
+  background:rgba(18,26,38,.45);
+}
+.sb-session-btn{
+  background:rgba(245,166,35,.1);border:1px solid rgba(245,166,35,.35);color:#ffd98a;
+  font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;
+  width:100%;min-width:0;height:26px;padding:0 10px;border-radius:4px;
+  cursor:pointer;display:flex;align-items:center;justify-content:center;
+  transition:all .15s;line-height:1;white-space:nowrap;
+}
+.sb-session-btn:hover{color:#fff;border-color:#ffd98a;background:rgba(245,166,35,.2);box-shadow:0 0 10px rgba(245,166,35,.2)}
 .sb-folder-btn{
   background:rgba(0,191,255,.08);border:1px solid rgba(0,191,255,.28);color:var(--accent);
   font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;
@@ -1318,6 +1333,89 @@ select.sf-input{cursor:pointer;appearance:auto}
 .input-modal-title{
   font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:2px;
   color:var(--accent);text-transform:uppercase;margin-bottom:12px;
+}
+
+/* Session launcher modal */
+#session-modal{display:none;position:fixed;inset:0;z-index:2150}
+.session-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);backdrop-filter:blur(4px)}
+.session-panel{
+  position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+  width:min(520px,90vw);max-height:85vh;
+  background:var(--bg2);border:1px solid var(--border2);border-radius:8px;
+  display:flex;flex-direction:column;overflow:hidden;
+  box-shadow:0 20px 60px rgba(0,0,0,.5);
+}
+.session-header{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:14px 18px;border-bottom:1px solid var(--border);flex-shrink:0;
+}
+.session-title{
+  font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:3px;
+  color:#ffd98a;text-transform:uppercase;
+}
+.session-close-btn{
+  background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer;
+  transition:color .15s;padding:0;line-height:1;
+}
+.session-close-btn:hover{color:var(--danger)}
+.session-body{padding:14px 18px;overflow-y:auto}
+.session-body::-webkit-scrollbar{width:3px}
+.session-body::-webkit-scrollbar-thumb{background:var(--border2)}
+.session-hint{
+  margin-top:2px;margin-bottom:12px;
+  color:var(--text2);font-size:11px;line-height:1.35;
+}
+.session-row{margin-bottom:12px}
+.session-row-inline{
+  display:flex;
+  gap:10px;
+  align-items:flex-end;
+}
+.session-col{flex:1 1 auto}
+.session-col-sm{flex:0 0 132px}
+.session-inline{
+  display:flex;
+  gap:6px;
+  align-items:center;
+}
+.session-inline .session-input{flex:1}
+.session-label{
+  display:block;font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:2px;
+  color:var(--muted);text-transform:uppercase;margin-bottom:5px;
+}
+.session-input{
+  width:100%;padding:8px 10px;
+  background:var(--bg);border:1px solid var(--border);border-radius:4px;
+  color:var(--text);font-family:'JetBrains Mono',monospace;font-size:12px;
+  outline:none;transition:border-color .15s;
+}
+.session-input:focus{border-color:var(--accent)}
+.session-check{
+  display:flex;align-items:center;gap:8px;
+  color:var(--text2);font-family:'JetBrains Mono',monospace;font-size:10px;
+  letter-spacing:.6px;text-transform:uppercase;
+}
+.session-actions{
+  display:flex;justify-content:flex-end;gap:10px;
+  padding:14px 18px;border-top:1px solid var(--border);flex-shrink:0;
+}
+.session-cancel-btn{
+  padding:8px 20px;background:none;border:1px solid var(--border);
+  color:var(--text2);font-family:'JetBrains Mono',monospace;font-size:10px;
+  letter-spacing:1px;border-radius:4px;cursor:pointer;transition:all .15s;
+}
+.session-cancel-btn:hover{border-color:var(--text2);color:var(--text)}
+.session-start-btn{
+  padding:8px 20px;background:rgba(245,166,35,.12);border:1px solid rgba(245,166,35,.45);
+  color:#ffd98a;font-family:'JetBrains Mono',monospace;font-size:10px;
+  letter-spacing:1px;border-radius:4px;cursor:pointer;transition:all .15s;
+}
+.session-start-btn:hover{background:rgba(245,166,35,.22);border-color:#ffd98a;color:#fff}
+.session-error{
+  margin:0 18px 12px;
+  padding:8px 12px;background:rgba(255,59,92,.08);
+  border:1px solid rgba(255,59,92,.25);border-radius:4px;
+  color:var(--danger);font-family:'JetBrains Mono',monospace;font-size:10px;
 }
 .input-modal-label{
   display:block;font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:2px;
