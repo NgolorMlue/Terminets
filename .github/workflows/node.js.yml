@@ -1,20 +1,82 @@
-name: Build Tauri App
+name: Full Auto Tauri Release
 
 on:
   push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
+    branches:
+      - main
+
+permissions:
+  contents: write
 
 jobs:
-  build:
+  version:
     runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Calculate next version
+      - name: Bump Version
+        id: bump
+        run: |
+          BASE_VERSION="1.12"
+
+          # Count previous releases
+          COUNT=$(git tag | grep "^v$BASE_VERSION" | wc -l)
+          PATCH=$((COUNT + 1))
+
+          VERSION="$BASE_VERSION.$PATCH"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      # Update tauri.conf.json
+      - name: Update tauri.conf.json
+        run: |
+          jq ".version=\"${{ steps.bump.outputs.version }}\"" src-tauri/tauri.conf.json > temp.json
+          mv temp.json src-tauri/tauri.conf.json
+
+      # Update package.json
+      - name: Update package.json
+        run: |
+          jq ".version=\"${{ steps.bump.outputs.version }}\"" package.json > temp.json
+          mv temp.json package.json
+
+      # Generate changelog from commits
+      - name: Generate CHANGELOG.md
+        run: |
+          echo "## v${{ steps.bump.outputs.version }}" > CHANGELOG.md
+          git log -10 --pretty=format:"- %s" >> CHANGELOG.md
+
+      # Commit version bump
+      - name: Commit version bump
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add .
+          git commit -m "chore: release v${{ steps.bump.outputs.version }}"
+          git tag v${{ steps.bump.outputs.version }}
+          git push origin main --tags
+
+  build:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+          - platform: windows-latest
+          - platform: macos-latest
+
+    runs-on: ${{ matrix.platform }}
 
     steps:
       - uses: actions/checkout@v4
 
-      # Install Linux dependencies required by Tauri
       - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -24,21 +86,40 @@ jobs:
             libwebkit2gtk-4.1-dev \
             libayatana-appindicator3-dev
 
-      # Setup Node
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'npm'
+          cache: npm
 
-      # Install frontend deps
-      - name: Install dependencies
-        run: npm install
+      - run: npm install
 
-      # Setup Rust
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
 
-      # Build Tauri
-      - name: Build Tauri app
+      - name: Build Tauri
         run: npm run tauri build
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: tauri-${{ matrix.platform }}
+          path: src-tauri/target/release/bundle/**
+
+  release:
+    needs: [version, build]
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.version.outputs.version }}
+          name: v${{ needs.version.outputs.version }}
+          body_path: CHANGELOG.md
+          files: artifacts/**/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
