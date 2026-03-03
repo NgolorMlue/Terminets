@@ -5,6 +5,9 @@ on:
     branches:
       - main
     paths-ignore:
+      - "README.md"
+      - "*.md"
+      - "docs/**"
       - "CHANGELOG.md"
       - "package.json"
       - "src-tauri/tauri.conf.json"
@@ -24,7 +27,7 @@ jobs:
           fetch-depth: 0
 
       - name: Install jq
-        run: sudo apt-get install -y jq
+        run: sudo apt-get update && sudo apt-get install -y jq
 
       - name: Calculate Next Version
         id: bump
@@ -114,6 +117,19 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch tags
+        run: |
+          git fetch --tags
+          git tag
+
+      # =====Prevent GitHub API race condition=====
+      - name: Wait for tag propagation
+        run: sleep 10
+
       - name: Download Artifacts
         uses: actions/download-artifact@v4
         with:
@@ -124,8 +140,7 @@ jobs:
         with:
           tag_name: v${{ needs.version.outputs.version }}
           name: v${{ needs.version.outputs.version }}
-          body_path: CHANGELOG.md
+          generate_release_notes: true
           files: artifacts/**/*
-          overwrite_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
