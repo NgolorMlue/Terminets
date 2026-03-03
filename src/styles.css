@@ -351,14 +351,14 @@ body {
 }
 
 #sidebar.collapsed .sb-toggle {
-  color: #cdeaff;
+  color: var(--text);
   font-weight: 800;
 }
 
 #sidebar.collapsed #sb-toggle-arrow {
   font-size: 13px;
   font-weight: 900;
-  color: #bfffe9;
+  color: var(--accent2);
   text-shadow: 0 0 10px rgba(0, 255, 170, .35);
   line-height: 1;
 }
@@ -502,7 +502,7 @@ body {
   margin: 0 8px 6px;
   padding: 10px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: 6px;
   background: rgba(7, 9, 13, .6);
   display: flex;
   flex-direction: column;
@@ -579,7 +579,7 @@ body {
 
 .sb-folder-row:hover {
   border-color: rgba(0, 191, 255, .45);
-  color: #cde7ff
+  color: var(--text)
 }
 
 .sb-folder-row.collapsed {
@@ -608,7 +608,7 @@ body {
   border-color: rgba(0, 255, 170, .72);
   box-shadow: 0 0 0 1px rgba(0, 255, 170, .35), inset 0 0 0 1px rgba(0, 255, 170, .18);
   background: rgba(0, 255, 170, .08);
-  color: #cffff0;
+  color: var(--accent2);
 }
 
 .sb-folder-row-ghost {
@@ -663,7 +663,7 @@ body {
   font-size: 8px;
   letter-spacing: .6px;
   border: 1px solid rgba(36, 53, 80, .8);
-  border-radius: 10px;
+  border-radius: 8px;
   padding: 1px 6px;
 }
 
@@ -672,7 +672,7 @@ body {
   align-items: center;
   gap: 8px;
   padding: 9px 10px;
-  border-radius: 5px;
+  border-radius: 6px;
   cursor: pointer;
   border: 1px solid transparent;
   transition: all .18s;
@@ -797,7 +797,7 @@ body {
   background: rgba(0, 191, 255, .12);
   border: 1px solid rgba(0, 191, 255, .3);
   color: var(--accent);
-  border-radius: 3px;
+  border-radius: 4px;
   padding: 1px 5px;
   letter-spacing: .5px;
   white-space: nowrap;
@@ -904,7 +904,7 @@ body {
   font-size: 9px;
   letter-spacing: 1px;
   padding: 2px 10px;
-  border-radius: 3px;
+  border-radius: 4px;
   cursor: pointer;
   transition: all .15s;
   display: flex;
@@ -1421,7 +1421,7 @@ body {
   color: var(--muted) !important;
   font-family: 'JetBrains Mono', monospace !important;
   font-size: 8px !important;
-  border-radius: 3px 0 0 0 !important;
+  border-radius: 4px 0 0 0 !important;
   padding: 2px 6px !important
 }
 
@@ -1522,15 +1522,15 @@ body {
   font-family: 'JetBrains Mono', monospace;
   font-size: 10px;
   font-weight: 700;
-  color: #deeeff;
-  text-shadow: 0 0 8px rgba(0, 0, 0, .9), 0 0 4px #000;
+  color: var(--text);
+  text-shadow: 0 0 8px rgba(0, 0, 0, .9), 0 0 4px rgba(0, 0, 0, 1);
   pointer-events: none;
   letter-spacing: .5px
 }
 
 .node-label.active-label {
-  color: #00bfff;
-  text-shadow: 0 0 10px rgba(0, 191, 255, .6), 0 0 4px #000
+  color: var(--accent);
+  text-shadow: 0 0 10px rgba(0, 191, 255, .6), 0 0 4px rgba(0, 0, 0, 1)
 }
 
 .map-legend {
@@ -1539,7 +1539,7 @@ body {
   left: 12px;
   background: rgba(7, 9, 13, .9);
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: 6px;
   padding: 8px 12px;
   z-index: 500;
   backdrop-filter: blur(8px)
@@ -1581,7 +1581,7 @@ body {
   letter-spacing: 1px;
   background: rgba(7, 9, 13, .7);
   padding: 3px 8px;
-  border-radius: 3px
+  border-radius: 4px
 }
 
 /* ════ BOTTOM ════ */
@@ -1821,7 +1821,7 @@ body {
   transform: translateX(-50%);
   background: rgba(7, 9, 13, .96);
   border: 1px solid var(--border2);
-  border-radius: 3px;
+  border-radius: 4px;
   padding: 3px 8px;
   font-family: 'JetBrains Mono', monospace;
   font-size: 9px;
@@ -1896,7 +1896,7 @@ body {
   right: 0;
   background: rgba(7, 9, 13, .96);
   border: 1px solid var(--border2);
-  border-radius: 3px;
+  border-radius: 4px;
   padding: 3px 10px;
   font-family: 'JetBrains Mono', monospace;
   font-size: 9px;
@@ -2062,32 +2062,32 @@ body {
 
 .st-online {
   background: rgba(0, 255, 170, .12);
-  color: #00ffaa;
+  color: var(--accent2);
   border: 1px solid rgba(0, 255, 170, .3)
 }
 
 .st-warn {
   background: rgba(245, 166, 35, .12);
-  color: #f5a623;
+  color: var(--warn);
   border: 1px solid rgba(245, 166, 35, .3)
 }
 
 .st-offline {
   background: rgba(255, 59, 92, .12);
-  color: #ff3b5c;
+  color: var(--danger);
   border: 1px solid rgba(255, 59, 92, .3)
 }
 
 .pc-ok {
-  color: #00ffaa
+  color: var(--accent2)
 }
 
 .pc-warn {
-  color: #f5a623
+  color: var(--warn)
 }
 
 .pc-bad {
-  color: #ff3b5c
+  color: var(--danger)
 }
 
 /* Dashboard shell */
@@ -2213,7 +2213,7 @@ body {
 }
 
 .mx-refresh-info.is-error {
-  color: #ff3b5c
+  color: var(--danger)
 }
 
 /* Resource gauges */
@@ -2226,7 +2226,7 @@ body {
 .mx-gauge {
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 8px;
   padding: 20px;
   text-align: center;
   transition: border-color .15s ease;
@@ -2566,7 +2566,7 @@ body {
 
 .mx-cap-bar>div {
   height: 100%;
-  border-radius: 3px;
+  border-radius: 4px;
   transition: width .4s ease;
   background: var(--accent);
 }
@@ -2613,7 +2613,7 @@ body {
 
 /* ── TERMINAL ── */
 .term-panel {
-  background: #060a0e;
+  background: var(--bg);
   font-family: 'JetBrains Mono', monospace
 }
 
@@ -2658,7 +2658,7 @@ body {
 .term-cross-badge {
   background: rgba(245, 166, 35, .1);
   border: 1px solid rgba(245, 166, 35, .3);
-  border-radius: 3px;
+  border-radius: 4px;
   padding: 1px 6px;
   font-size: 8px;
   color: var(--warn);
@@ -2680,10 +2680,15 @@ body {
   font-family: 'JetBrains Mono', monospace;
   font-size: 9px;
   letter-spacing: 1px;
-  border-radius: 3px;
+  border-radius: 4px;
   cursor: pointer;
   transition: all .15s;
   white-space: nowrap
+}
+
+.term-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .term-btn:hover {
@@ -2708,7 +2713,7 @@ body {
   flex: 1;
   min-height: 0;
   overflow: hidden;
-  background: #060a0e
+  background: var(--bg)
 }
 
 .term-conn-status {
@@ -2718,7 +2723,7 @@ body {
 
 /* ── VNC ── */
 .vnc-panel {
-  background: #060a0e;
+  background: var(--bg);
   display: flex;
   flex-direction: column
 }
@@ -2730,7 +2735,7 @@ body {
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  background: #000
+  background: var(--bg)
 }
 
 .vnc-viewer {
@@ -2825,7 +2830,7 @@ body {
   gap: 0;
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: 6px;
   background: rgba(6, 10, 14, .7);
 }
 
@@ -2846,7 +2851,12 @@ body {
 }
 
 .sftp-pane-btn:hover {
-  color: var(--text2)
+  color: var(--text)
+}
+
+.sftp-pane-btn:focus-visible {
+  outline: 2px solid var(--accent2);
+  outline-offset: -2px;
 }
 
 .sftp-pane-btn.active {
@@ -2865,7 +2875,7 @@ body {
   gap: 0;
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: 6px;
   background: rgba(6, 10, 14, .7);
 }
 
@@ -2886,7 +2896,12 @@ body {
 }
 
 .sftp-view-btn:hover {
-  color: var(--text2)
+  color: var(--text)
+}
+
+.sftp-view-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 .sftp-view-btn.active {
@@ -2920,6 +2935,11 @@ body {
   color: var(--accent)
 }
 
+.sftp-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .sftp-btn:disabled {
   opacity: .6;
   cursor: not-allowed
@@ -2937,7 +2957,7 @@ body {
 .sftp-path {
   width: 100%;
   min-width: 0;
-  background: #060a0e;
+  background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 4px;
   color: var(--text);
@@ -2945,6 +2965,11 @@ body {
   font-size: 10px;
   padding: 5px 6px;
   outline: none;
+}
+
+.sftp-path:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(0, 191, 255, .2);
 }
 
 .sftp-path:focus {
@@ -3093,15 +3118,15 @@ body {
 }
 
 .sftp-entry-icon.file {
-  color: #87a5c4
+  color: var(--text2)
 }
 
 .sftp-entry-icon.dir {
-  color: #00ffaa
+  color: var(--accent2)
 }
 
 .sftp-entry-icon.link {
-  color: #00bfff
+  color: var(--accent)
 }
 
 .sftp-type,
@@ -3209,7 +3234,7 @@ body {
   gap: 8px;
   align-items: center;
   border: 1px solid rgba(36, 53, 80, .7);
-  border-radius: 7px;
+  border-radius: 6px;
   padding: 8px 10px;
   background: rgba(7, 9, 13, .72);
 }
@@ -3254,8 +3279,8 @@ body {
   min-height: 0;
   resize: none;
   border: 1px solid var(--border2);
-  border-radius: 7px;
-  background: #060a0e;
+  border-radius: 6px;
+  background: var(--bg);
   color: var(--text);
   padding: 10px;
   font-size: 12px;
@@ -3266,6 +3291,11 @@ body {
 
 .sftp-editor-text:focus {
   border-color: var(--accent)
+}
+
+.sftp-editor-text:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(0, 191, 255, .2);
 }
 
 .sftp-context-menu {
@@ -3500,24 +3530,29 @@ body {
 }
 
 .sb-add-btn:hover {
-  color: #fff;
+  color: var(--text);
   border-color: var(--accent2);
   background: rgba(0, 255, 170, .18);
   box-shadow: 0 0 10px rgba(0, 255, 170, .2)
+}
+
+.sb-add-btn:focus-visible {
+  outline: 2px solid var(--accent2);
+  outline-offset: 2px;
 }
 
 .sb-session-row {
   margin: 0 8px 8px;
   padding: 8px 10px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: 6px;
   background: rgba(18, 26, 38, .45);
 }
 
 .sb-session-btn {
   background: rgba(245, 166, 35, .1);
   border: 1px solid rgba(245, 166, 35, .35);
-  color: #ffd98a;
+  color: var(--warn);
   font-family: 'JetBrains Mono', monospace;
   font-size: 9px;
   font-weight: 700;
@@ -3538,10 +3573,15 @@ body {
 }
 
 .sb-session-btn:hover {
-  color: #fff;
-  border-color: #ffd98a;
+  color: var(--text);
+  border-color: var(--warn);
   background: rgba(245, 166, 35, .2);
   box-shadow: 0 0 10px rgba(245, 166, 35, .2)
+}
+
+.sb-session-btn:focus-visible {
+  outline: 2px solid var(--warn);
+  outline-offset: 2px;
 }
 
 .sb-folder-btn {
@@ -3568,10 +3608,15 @@ body {
 }
 
 .sb-folder-btn:hover {
-  color: #fff;
+  color: var(--text);
   border-color: var(--accent);
   background: rgba(0, 191, 255, .16);
   box-shadow: 0 0 10px rgba(0, 191, 255, .2)
+}
+
+.sb-folder-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 /* ══════════════════════════════════════════
@@ -3663,9 +3708,14 @@ body {
   font-family: 'JetBrains Mono', monospace;
   font-size: 11px;
   letter-spacing: 2px;
-  border-radius: 5px;
+  border-radius: 6px;
   cursor: pointer;
   transition: all .15s;
+}
+
+.settings-add-btn:focus-visible {
+  outline: 2px solid var(--accent2);
+  outline-offset: 2px;
 }
 
 .settings-add-btn:hover {
@@ -3680,7 +3730,7 @@ body {
   justify-content: space-between;
   padding: 10px 14px;
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: 6px;
   margin-bottom: 6px;
   transition: all .15s;
 }
@@ -3720,9 +3770,16 @@ body {
   font-family: 'JetBrains Mono', monospace;
   font-size: 9px;
   letter-spacing: 1px;
-  border-radius: 3px;
+  border-radius: 4px;
   cursor: pointer;
   transition: all .15s;
+}
+
+.sl-edit-btn:focus-visible,
+.sl-clear-host-btn:focus-visible,
+.sl-delete-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .sl-edit-btn:hover {
@@ -3731,8 +3788,8 @@ body {
 }
 
 .sl-clear-host-btn:hover {
-  border-color: #ffd84d;
-  color: #ffd84d
+  border-color: var(--warn);
+  color: var(--warn)
 }
 
 .sl-delete-btn:hover {
@@ -3867,6 +3924,18 @@ select.sf-input {
   border-color: var(--accent2)
 }
 
+.sf-save-btn:focus-visible,
+.sf-cancel-btn:focus-visible,
+.sf-browse-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.sf-input:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(0, 191, 255, .2);
+}
+
 .sf-error {
   margin-top: 10px;
   padding: 8px 12px;
@@ -3959,7 +4028,7 @@ select.sf-input {
   font-family: 'JetBrains Mono', monospace;
   font-size: 11px;
   letter-spacing: 3px;
-  color: #ffd98a;
+  color: var(--warn);
   text-transform: uppercase;
 }
 
@@ -4096,7 +4165,7 @@ select.sf-input {
   padding: 8px 20px;
   background: rgba(245, 166, 35, .12);
   border: 1px solid rgba(245, 166, 35, .45);
-  color: #ffd98a;
+  color: var(--warn);
   font-family: 'JetBrains Mono', monospace;
   font-size: 10px;
   letter-spacing: 1px;
@@ -4107,8 +4176,23 @@ select.sf-input {
 
 .session-start-btn:hover {
   background: rgba(245, 166, 35, .22);
-  border-color: #ffd98a;
-  color: #fff
+  border-color: var(--warn);
+  color: var(--text)
+}
+
+.session-start-btn:focus-visible {
+  outline: 2px solid var(--warn);
+  outline-offset: 2px;
+}
+
+.session-cancel-btn:focus-visible {
+  outline: 2px solid var(--text2);
+  outline-offset: 2px;
+}
+
+.session-input:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(0, 191, 255, .2);
 }
 
 .session-error {
@@ -4787,7 +4871,7 @@ button:disabled {
   font-size: 10px;
   background: var(--bg3);
   border: 1px solid var(--border);
-  border-radius: 3px;
+  border-radius: 4px;
   padding: 2px 6px;
   color: var(--accent2);
 }
