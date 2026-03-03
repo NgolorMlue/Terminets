@@ -12,6 +12,16 @@ Terminets (internally branded in the UI as **NODE/GRID**) is built with:
 
 The app combines SSH-based server operations, live status insights, and file access tools into one control panel.
 
+## Screenshots
+
+Main dashboard view:
+
+![Terminets dashboard screenshot](./img-prev/1.png)
+
+Terminal and management view:
+
+![Terminets terminal and management screenshot](./img-prev/2.png)
+
 ## Core capabilities
 
 - Fleet-style server dashboard with online/total/ping status
