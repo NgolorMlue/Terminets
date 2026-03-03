@@ -4,6 +4,10 @@ on:
   push:
     branches:
       - main
+    paths-ignore:
+      - "CHANGELOG.md"
+      - "package.json"
+      - "src-tauri/tauri.conf.json"
 
 permissions:
   contents: write
@@ -19,39 +23,37 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Calculate next version
-      - name: Bump Version
+      - name: Install jq
+        run: sudo apt-get install -y jq
+
+      - name: Calculate Next Version
         id: bump
         run: |
           BASE_VERSION="1.12"
 
-          # Count previous releases
           COUNT=$(git tag | grep "^v$BASE_VERSION" | wc -l)
           PATCH=$((COUNT + 1))
 
           VERSION="$BASE_VERSION.$PATCH"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
-      # Update tauri.conf.json
       - name: Update tauri.conf.json
         run: |
           jq ".version=\"${{ steps.bump.outputs.version }}\"" src-tauri/tauri.conf.json > temp.json
           mv temp.json src-tauri/tauri.conf.json
 
-      # Update package.json
       - name: Update package.json
         run: |
           jq ".version=\"${{ steps.bump.outputs.version }}\"" package.json > temp.json
           mv temp.json package.json
 
-      # Generate changelog from commits
       - name: Generate CHANGELOG.md
         run: |
           echo "## v${{ steps.bump.outputs.version }}" > CHANGELOG.md
+          echo "" >> CHANGELOG.md
           git log -10 --pretty=format:"- %s" >> CHANGELOG.md
 
-      # Commit version bump
-      - name: Commit version bump
+      - name: Commit & Tag
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
@@ -86,16 +88,19 @@ jobs:
             libwebkit2gtk-4.1-dev \
             libayatana-appindicator3-dev
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
 
-      - run: npm install
+      - name: Install frontend dependencies
+        run: npm install
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: Build Tauri
+      - name: Build Tauri App
         run: npm run tauri build
 
       - name: Upload Artifacts
@@ -114,12 +119,13 @@ jobs:
         with:
           path: artifacts
 
-      - name: Create Release
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ needs.version.outputs.version }}
           name: v${{ needs.version.outputs.version }}
           body_path: CHANGELOG.md
           files: artifacts/**/*
+          overwrite_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
